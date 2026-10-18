@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <title>Haus · Timeline</title>
+    <link rel="icon" href="icon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <a class="brand" href="./"
+        ><img src="icon.svg" alt="" width="30" height="30" />haus.</a
+      ><span class="header-label">Timeline</span
+      ><span id="connection" class="connection">Connecting</span>
+    </header>
+    <main>
+      <div class="intro">
+        <div>
+          <p class="eyebrow">A LITTLE CLOSER TO HOME</p>
+          <h1>The moments that matter.</h1>
+          <p>Camera events. Kept at home.</p>
+        </div>
+        <div id="storage" class="storage"></div>
+      </div>
+      <p id="error" role="alert" hidden></p>
+      <div class="camera-heading">
+        <h2>Your cameras</h2>
+        <span id="camera-count"></span>
+      </div>
+      <section id="cameras" class="cameras" aria-label="Cameras"></section>
+      <section class="history">
+        <div class="history-heading">
+          <div>
+            <h2>At a glance</h2>
+            <p id="event-caption">Choose a moment to look closer.</p>
+          </div>
+          <label class="date"
+            ><span>Day</span
+            ><input type="date" id="day" aria-label="Recording date"
+          /></label>
+        </div>
+        <div class="filters" id="filters"></div>
+        <div id="playback" class="playback" hidden>
+          <div class="player-heading">
+            <div>
+              <strong id="clip-title"></strong>
+              <p id="clip-time"></p>
+            </div>
+            <button
+              id="close-player"
+              class="quiet"
+              aria-label="Close recording"
+            >
+              ✕
+            </button>
+          </div>
+          <video id="video" controls playsinline preload="metadata"></video>
+          <p id="play-error" role="status" hidden>
+            Playback is unavailable in this browser. You can download the
+            recording.
+          </p>
+          <a id="download" download class="text-link">Download recording ↓</a>
+        </div>
+        <div id="events" class="events"></div>
+        <button id="more" class="secondary more" hidden>
+          Load earlier events
+        </button>
+      </section>
+    </main>
+    <footer>
+      <span>Haus</span
+      ><span id="retention">Recordings stay on your home server.</span>
+    </footer>
+    <dialog id="settings">
+      <form method="dialog">
+        <div class="dialog-heading">
+          <div>
+            <p class="eyebrow">CAMERA SETTINGS</p>
+            <h2 id="settings-title"></h2>
+          </div>
+          <button class="quiet" aria-label="Close settings">✕</button>
+        </div>
+      </form>
+      <label class="setting-row"
+        ><span
+          ><strong>Record events</strong
+          ><small>Keep a short buffer and save detected activity.</small></span
+        ><input type="checkbox" id="record-enabled" /></label
+      ><label class="setting-row"
+        ><span
+          ><strong>Find detectors automatically</strong
+          ><small>Use related device and matching camera names.</small></span
+        ><input type="checkbox" id="auto-sensors"
+      /></label>
+      <fieldset id="detectors"><legend>Event detectors</legend></fieldset>
+      <p id="settings-error" role="alert" hidden></p>
+      <div class="dialog-actions">
+        <button id="save-settings" class="primary">Save changes</button>
+      </div>
+    </dialog>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

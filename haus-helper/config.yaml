@@ -1,0 +1,38 @@
+name: Haus
+slug: haus-helper
+version: "0.1.0"
+description: "Local camera event recording, a private timeline, and companion services for Haus."
+url: "https://github.com/resonaura/haus-helper"
+image: "ghcr.io/resonaura/haus-helper-{arch}"
+arch:
+  - amd64
+  - aarch64
+startup: services
+boot: auto
+init: false
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:home-outline
+panel_title: Haus
+homeassistant_api: true
+map:
+  - type: media
+    read_only: false
+options:
+  recording_enabled: true
+  record_audio: true
+  pre_roll_seconds: 8
+  post_roll_seconds: 20
+  max_event_seconds: 300
+  retention_days: 7
+  max_storage_gb: 10
+  max_buffer_gb: 1
+schema:
+  recording_enabled: bool
+  record_audio: bool
+  pre_roll_seconds: int(0,30)
+  post_roll_seconds: int(5,120)
+  max_event_seconds: int(30,300)
+  retention_days: int(1,90)
+  max_storage_gb: int(1,1000)
+  max_buffer_gb: int(1,10)
