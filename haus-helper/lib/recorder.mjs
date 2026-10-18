@@ -21,6 +21,9 @@ export class Recorder {
     this.buffers = new Map();
     this.active = new Map();
     this.finalizing = new Set();
+    this.playbackJobs = new Map();
+    this.playbackQueue = Promise.resolve();
+    this.playbackAbort = new AbortController();
     this.stopped = false;
     this.tickBusy = false;
   }
@@ -320,7 +323,6 @@ export class Recorder {
         { mode: 0o600 },
       );
       try {
-        const codec = (await probe(ready[0].path)).codec;
         const output = this.store.path(event.id);
         const temporary = output.replace(".mp4", ".partial.mp4");
         await runMedia(
@@ -337,19 +339,23 @@ export class Recorder {
             "0",
             "-i",
             manifest,
-            ...(this.config.record_audio ? ["-c:a", "copy"] : ["-an"]),
+            ...(this.config.record_audio
+              ? ["-c:a", "aac", "-b:a", "96k"]
+              : ["-an"]),
             "-c:v",
-            ...(codec === "h264"
-              ? ["copy"]
-              : [
-                  "libx264",
-                  "-preset",
-                  "veryfast",
-                  "-crf",
-                  "23",
-                  "-pix_fmt",
-                  "yuv420p",
-                ]),
+            // Camera bitstreams can contain parameter changes that software decoders
+            // recover from but VideoToolbox rejects mid-clip. Normalize once at save time.
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-threads",
+            "2",
+            "-pix_fmt",
+            "yuv420p",
+            "-fps_mode",
+            "vfr",
             "-movflags",
             "+faststart",
             temporary,
@@ -383,6 +389,7 @@ export class Recorder {
         this.store.finish(event.id, {
           duration: info.duration,
           bytes: file.size,
+          playbackVersion: 1,
           error:
             ready.at(-1).end < event.endAt - 8000
               ? "Partial recording: the camera stream stopped"
@@ -409,8 +416,70 @@ export class Recorder {
       error: buffer.lastError,
     }));
   }
+  async preparePlayback(event) {
+    if (event.playbackVersion === 1)
+      return this.store.path(
+        event.id,
+        event.playbackBytes ? "playback.mp4" : "mp4",
+      );
+    if (this.playbackJobs.has(event.id)) return this.playbackJobs.get(event.id);
+    const job = this.playbackQueue.then(async () => {
+      const output = this.store.path(event.id, "playback.mp4");
+      const temporary = output.replace(".mp4", ".partial.mp4");
+      try {
+        await runMedia(
+          "ffmpeg",
+          [
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-nostdin",
+            "-y",
+            "-i",
+            this.store.path(event.id),
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "20",
+            "-threads",
+            "2",
+            "-pix_fmt",
+            "yuv420p",
+            "-fps_mode",
+            "vfr",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "96k",
+            "-movflags",
+            "+faststart",
+            temporary,
+          ],
+          {
+            timeout: Math.max(120000, event.duration * 2000),
+            signal: this.playbackAbort.signal,
+          },
+        );
+        const info = await probe(temporary);
+        if (info.duration < 0.1) throw new Error("empty_video");
+        await rename(temporary, output);
+        this.store.setPlayback(event.id, (await stat(output)).size);
+        return output;
+      } finally {
+        await unlink(temporary).catch(() => {});
+        this.playbackJobs.delete(event.id);
+      }
+    });
+    this.playbackQueue = job.catch(() => {});
+    this.playbackJobs.set(event.id, job);
+    return job;
+  }
   async stop() {
     this.stopped = true;
+    this.playbackAbort.abort();
+    await Promise.allSettled([...this.playbackJobs.values()]);
     clearInterval(this.timer);
     for (const buffer of this.buffers.values()) {
       buffer.stopped = true;

@@ -238,3 +238,63 @@ test("batched segments have unique sequence identities and duplicate paths are n
     1,
   );
 });
+
+test(
+  "prepares one hardware-compatible legacy copy and preserves the original",
+  { timeout: 30000 },
+  async (t) => {
+    const { store, recorder } = await fixture(t);
+    const event = store.create(
+      "camera.test",
+      "manual",
+      Date.now(),
+      Date.now() + 2000,
+    );
+    await runMedia("ffmpeg", [
+      "-hide_banner",
+      "-v",
+      "error",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=s=160x90:r=10",
+      "-t",
+      "2",
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      store.path(event.id),
+    ]);
+    const before = await readFile(store.path(event.id));
+    store.finish(event.id, { duration: 2, bytes: before.length });
+    const legacy = store.get(event.id);
+    const paths = await Promise.all([
+      recorder.preparePlayback(legacy),
+      recorder.preparePlayback(legacy),
+    ]);
+    assert.equal(paths[0], paths[1]);
+    assert.notEqual(paths[0], store.path(event.id));
+    assert.deepEqual(await readFile(store.path(event.id)), before);
+    assert.ok(store.get(event.id).playbackBytes > 0);
+    assert.equal(
+      store.totals().bytes,
+      before.length + (await stat(paths[0])).size,
+    );
+    assert.equal(await recorder.preparePlayback(store.get(event.id)), paths[0]);
+    await runMedia("ffmpeg", [
+      "-v",
+      "error",
+      "-xerror",
+      "-i",
+      paths[0],
+      "-f",
+      "null",
+      "-",
+    ]);
+    await store.prune({ retention_days: 7, max_storage_gb: 0 });
+    assert.equal(store.get(event.id), undefined);
+    await assert.rejects(stat(paths[0]), { code: "ENOENT" });
+  },
+);

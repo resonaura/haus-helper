@@ -223,7 +223,10 @@ export function createApi({
         if (event.status !== "ready")
           return json(res, 409, { error: "video_not_ready" });
         const type = eventMatch[2] === "video" ? "mp4" : "jpg";
-        const file = store.path(event.id, type);
+        const file =
+          type === "mp4" && recorder.preparePlayback
+            ? await recorder.preparePlayback(event)
+            : store.path(event.id, type);
         let info;
         try {
           info = await stat(file);

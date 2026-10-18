@@ -13,6 +13,19 @@ export class Store {
     CREATE TABLE IF NOT EXISTS camera_availability (camera_id TEXT NOT NULL, start_at INTEGER NOT NULL, end_at INTEGER NOT NULL, state TEXT NOT NULL, PRIMARY KEY(camera_id,start_at));
     CREATE INDEX IF NOT EXISTS camera_availability_time ON camera_availability(camera_id,end_at);
     PRAGMA user_version=2;`);
+    const columns = this.db
+      .prepare("PRAGMA table_info(events)")
+      .all()
+      .map((row) => row.name);
+    if (!columns.includes("playback_version"))
+      this.db.exec(
+        "ALTER TABLE events ADD COLUMN playback_version INTEGER DEFAULT 0",
+      );
+    if (!columns.includes("playback_bytes"))
+      this.db.exec(
+        "ALTER TABLE events ADD COLUMN playback_bytes INTEGER DEFAULT 0",
+      );
+    this.db.exec("PRAGMA user_version=3");
   }
   overrides() {
     return Object.fromEntries(
@@ -111,17 +124,33 @@ export class Store {
       .run(endAt, id);
     return this.get(id);
   }
-  finish(id, { status = "ready", duration = 0, bytes = 0, error = null } = {}) {
+  finish(
+    id,
+    {
+      status = "ready",
+      duration = 0,
+      bytes = 0,
+      error = null,
+      playbackVersion = 0,
+    } = {},
+  ) {
     this.db
       .prepare(
-        "UPDATE events SET status=?,duration=?,bytes=?,error=? WHERE id=?",
+        "UPDATE events SET status=?,duration=?,bytes=?,error=?,playback_version=? WHERE id=?",
       )
-      .run(status, duration, bytes, error, id);
+      .run(status, duration, bytes, error, playbackVersion, id);
     return this.get(id);
   }
   get(id) {
     const row = this.db.prepare("SELECT * FROM events WHERE id=?").get(id);
     return row && this.present(row);
+  }
+  setPlayback(id, bytes) {
+    this.db
+      .prepare(
+        "UPDATE events SET playback_version=1,playback_bytes=? WHERE id=?",
+      )
+      .run(bytes, id);
   }
   present(row) {
     return {
@@ -135,6 +164,8 @@ export class Store {
       duration: row.duration,
       bytes: row.bytes,
       error: row.error,
+      playbackVersion: row.playback_version,
+      playbackBytes: row.playback_bytes,
       videoUrl:
         row.status === "ready" ? `api/events/${row.id}/video` : undefined,
       thumbnailUrl:
@@ -193,7 +224,7 @@ export class Store {
   totals() {
     const row = this.db
       .prepare(
-        "SELECT count(*) AS count,coalesce(sum(bytes),0) AS bytes FROM events WHERE status='ready'",
+        "SELECT count(*) AS count,coalesce(sum(bytes+playback_bytes),0) AS bytes FROM events WHERE status='ready'",
       )
       .get();
     return { count: row.count, bytes: row.bytes };
@@ -201,7 +232,7 @@ export class Store {
   path(id, extension = "mp4") {
     if (
       !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(id) ||
-      !["mp4", "jpg"].includes(extension)
+      !["mp4", "jpg", "playback.mp4"].includes(extension)
     )
       throw new Error("invalid_event_id");
     return join(this.media, `${id}.${extension}`);
@@ -222,12 +253,12 @@ export class Store {
     for (const row of rows) {
       if (row.start_at >= cutoff && bytes <= max) continue;
       try {
-        for (const ext of ["mp4", "jpg"])
+        for (const ext of ["mp4", "jpg", "playback.mp4"])
           await unlink(this.path(row.id, ext)).catch((error) => {
             if (error.code !== "ENOENT") throw error;
           });
         this.db.prepare("DELETE FROM events WHERE id=?").run(row.id);
-        bytes -= row.bytes;
+        bytes -= row.bytes + row.playback_bytes;
         removed++;
       } catch {
         /* Keep metadata and retry later if storage is temporarily unavailable. */

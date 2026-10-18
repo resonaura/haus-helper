@@ -1,3 +1,8 @@
+## 0.1.7
+
+- Normalize saved video for reliable hardware decoding in macOS and desktop players.
+- Prepare compatible copies of older recordings on first use while preserving originals; include copies in retention and disk limits.
+
 ## 0.1.6
 
 - Persist observed camera availability for offline bands in the Haus video timeline. Gaps while Haus or the server is disconnected remain unknown.
