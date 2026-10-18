@@ -33,7 +33,7 @@ export function detectionKind(entity) {
   )
     return undefined;
   if (/doorbell|visitor|ringing/.test(text)) return "doorbell";
-  if (/pet|animal|\bdog\b|\bcat\b/.test(text)) return "pet";
+  if (/\b(pet|animal|dog|cat)\b/.test(text.replaceAll("_", " "))) return "pet";
   if (/person|human|people/.test(text)) return "person";
   if (/vehicle|car_detection/.test(text)) return "vehicle";
   if (/motion|occupancy|presence|movement/.test(text)) return "motion";
@@ -48,7 +48,7 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
       !registry.get(state.entity_id)?.disabled_by &&
       !registry.get(state.entity_id)?.hidden_by,
   );
-  const cameras = visible
+  const allCameras = visible
     .filter((state) => state.entity_id.startsWith("camera."))
     .map((state) => {
       const entry = registry.get(state.entity_id) ?? {};
@@ -72,6 +72,37 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
         manualSensors: overrides[state.entity_id]?.sensorIds,
       };
     });
+  // A Generic/Proxy camera explicitly paired with its `_internal` entity is a
+  // presentation wrapper. Keep the stream-capable public entity and inherit its
+  // underlying device's detectors instead of buffering the same video twice.
+  const aliasOwner = new Map();
+  for (const camera of allCameras) {
+    if (!camera.id.endsWith("_internal")) continue;
+    const publicId = camera.id.slice(0, -9);
+    const primary = allCameras.find((item) => item.id === publicId);
+    if (
+      !primary ||
+      !["generic", "proxy", "template"].includes(
+        registry.get(publicId)?.platform,
+      )
+    )
+      continue;
+    const names = (item) =>
+      [...new Set(tokens(item.name).filter((token) => token !== "internal"))]
+        .sort()
+        .join(" ");
+    if (names(primary) === names(camera)) aliasOwner.set(camera.id, publicId);
+  }
+  const cameras = allCameras.filter((camera) => !aliasOwner.has(camera.id));
+  for (const camera of cameras) {
+    camera.aliases = [...aliasOwner]
+      .filter(([, id]) => id === camera.id)
+      .map(([id]) => id);
+    camera.deviceIds = [
+      camera.deviceId,
+      ...camera.aliases.map((id) => registry.get(id)?.device_id),
+    ].filter(Boolean);
+  }
   for (const state of visible) {
     const kind = detectionKind(state);
     if (!kind) continue;
@@ -79,7 +110,8 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
     const device = deviceMap.get(sensor.device_id);
     const areaId = sensor.area_id ?? device?.area_id;
     const own = cameras.filter(
-      (camera) => sensor.device_id && camera.deviceId === sensor.device_id,
+      (camera) =>
+        sensor.device_id && camera.deviceIds.includes(sensor.device_id),
     );
     const descriptor = {
       id: state.entity_id,
@@ -103,10 +135,13 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
         ).size;
         return {
           camera,
-          score: shared * 10 + (areaId && camera.areaId === areaId ? 2 : 0),
+          score:
+            shared * 10 -
+            (new Set(cameraTokens).size - shared) * 2 +
+            (areaId && camera.areaId === areaId ? 2 : 0),
         };
       })
-      .filter((item) => item.score >= 10)
+      .filter((item) => item.score >= 6)
       .sort((a, b) => b.score - a.score);
     if (ranked.length && (!ranked[1] || ranked[0].score > ranked[1].score))
       ranked[0].camera.sensors.push({ ...descriptor, source: "name" });

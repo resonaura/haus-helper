@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import metadata from "../package.json" with { type: "json" };
 import { readFile, stat } from "node:fs/promises";
 import { createReadStream } from "node:fs";
 import { join, dirname } from "node:path";
@@ -91,7 +92,7 @@ export function createApi({
       if (req.method === "GET" && path === "/api/status")
         return json(res, 200, {
           name: "Haus",
-          version: "0.1.0",
+          version: metadata.version,
           connected: ha.connected,
           recordingEnabled: config.recording_enabled,
           storage: {
@@ -141,7 +142,11 @@ export function createApi({
           res,
           200,
           store.list({
-            cameraId,
+            cameraId:
+              getRegistry().cameras.find(
+                (item) =>
+                  item.id === cameraId || item.aliases?.includes(cameraId),
+              )?.id ?? cameraId,
             from: number("from", 0),
             to: number("to", Date.now() + 60000),
             limit: Math.min(200, Math.max(1, number("limit", 60))),
@@ -155,8 +160,12 @@ export function createApi({
           path,
         );
       if (cameraMatch) {
-        const id = cameraMatch[1];
-        const camera = getRegistry().cameras.find((item) => item.id === id);
+        const requestedId = cameraMatch[1];
+        const camera = getRegistry().cameras.find(
+          (item) =>
+            item.id === requestedId || item.aliases?.includes(requestedId),
+        );
+        const id = camera?.id;
         if (!camera) return json(res, 404, { error: "camera_not_found" });
         if (req.method === "GET" && cameraMatch[2] === "snapshot") {
           const image = await ha.snapshot(id);

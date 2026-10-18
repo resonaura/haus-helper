@@ -1,3 +1,9 @@
+# 0.1.1
+
+- Reuse public camera streams while inheriting internal camera detectors.
+- Avoid duplicate buffers for Generic camera wrappers.
+- Recover ongoing detector activity after reconnection.
+
 # 0.1.0
 
 - Automatic camera and event detector discovery with manual overrides.

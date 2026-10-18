@@ -98,3 +98,34 @@ test("ignores telemetry and only triggers on activation edges or event timestamp
     true,
   );
 });
+
+test("canonicalizes matching Generic wrappers and inherits their internal device detectors", () => {
+  const states = [
+    state("camera.outdoor", "Outdoor Camera"),
+    state("camera.outdoor_internal", "Outdoor Camera Outdoor Camera Camera"),
+    state("camera.outdoor_side", "Outdoor Side Camera"),
+    state("binary_sensor.outdoor_pet", "Outdoor Pet Detected"),
+    state("binary_sensor.outdoor_motion", "Outdoor Motion", "motion"),
+  ];
+  const entries = [
+    { entity_id: "camera.outdoor", platform: "generic", device_id: "generic" },
+    {
+      entity_id: "camera.outdoor_internal",
+      platform: "mqtt",
+      device_id: "real",
+    },
+    { entity_id: "binary_sensor.outdoor_pet", device_id: "real" },
+  ];
+  const cameras = discoverCameras(states, entries, []);
+  assert.equal(cameras.length, 2);
+  assert.deepEqual(cameras[0].aliases, ["camera.outdoor_internal"]);
+  assert.equal(
+    cameras[0].sensors.find((item) => item.kind === "pet").source,
+    "device",
+  );
+  assert.equal(
+    cameras[0].sensors.find((item) => item.kind === "motion").source,
+    "name",
+  );
+  assert.equal(cameras[1].sensors.length, 0);
+});

@@ -25,6 +25,17 @@ const apply = () => {
     store.overrides(),
   );
   recorder.sync(registry.cameras);
+  if (config.recording_enabled)
+    for (const camera of registry.cameras) {
+      const sensor = camera.sensors.find((item) => item.active);
+      if (
+        sensor &&
+        camera.available &&
+        camera.enabled &&
+        !recorder.active.has(camera.id)
+      )
+        recorder.trigger(camera.id, sensor.kind, sensor.id);
+    }
 };
 const refresh = async () => {
   if (refreshing) {
