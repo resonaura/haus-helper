@@ -220,16 +220,19 @@ export class Recorder {
       for (const event of this.store.recording()) {
         if (this.finalizing.has(event.id)) continue;
         const camera = this.cameras?.find((item) => item.id === event.cameraId);
-        const held = camera?.sensors.some((sensor) => sensor.active);
+        const activeSensors =
+          camera?.enabled && camera.available && this.config.recording_enabled
+            ? camera.sensors.filter((sensor) => sensor.active)
+            : [];
+        const held =
+          activeSensors.length > 0 &&
+          this.active.get(event.cameraId)?.id === event.id;
         if (
           held &&
-          now < event.startAt + this.config.max_event_seconds * 1000 &&
-          this.active.get(event.cameraId)?.id === event.id
+          now < event.startAt + this.config.max_event_seconds * 1000
         ) {
-          this.store.extend(
+          this.store.extendTail(
             event.id,
-            event.kinds[0],
-            now,
             Math.min(
               now + this.config.post_roll_seconds * 1000,
               event.startAt + this.config.max_event_seconds * 1000,
@@ -237,6 +240,9 @@ export class Recorder {
           );
           continue;
         }
+        if (held)
+          for (const sensor of activeSensors)
+            this.trigger(event.cameraId, sensor.kind, sensor.id, now);
         if (now >= event.endAt + 8000) {
           this.finalizing.add(event.id);
           if (this.active.get(event.cameraId)?.id === event.id)

@@ -1,3 +1,8 @@
+# 0.1.2
+
+- Continue long activity across bounded clips without fabricating detection events.
+- Respect paused cameras immediately and include all active detectors on reconnect.
+
 # 0.1.1
 
 - Reuse public camera streams while inheriting internal camera detectors.

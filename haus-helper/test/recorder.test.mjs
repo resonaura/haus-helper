@@ -93,3 +93,31 @@ test("a missing camera buffer records an honest failure rather than an empty pla
   assert.equal(store.get(event.id).status, "failed");
   assert.equal(store.get(event.id).videoUrl, undefined);
 });
+
+test("held motion extends the tail without inventing detections and rotates at the clip limit", async (t) => {
+  const { recorder, store } = await fixture(t);
+  const now = Date.now();
+  recorder.cameras[0].sensors = [
+    { id: "binary_sensor.motion", kind: "motion", active: true },
+  ];
+  const first = recorder.trigger(
+    "camera.test",
+    "motion",
+    "binary_sensor.motion",
+    now - 10000,
+  );
+  await recorder.tick();
+  assert.equal(store.get(first.id).detections.length, 1);
+  assert.ok(store.get(first.id).endAt >= now + 19000);
+  const old = store.create(
+    "camera.test",
+    "motion",
+    now - 310000,
+    now - 10000,
+    "binary_sensor.motion",
+  );
+  recorder.active.set("camera.test", old);
+  await recorder.tick();
+  assert.notEqual(recorder.active.get("camera.test").id, old.id);
+  assert.ok(store.recording().some((event) => event.id !== old.id));
+});

@@ -60,6 +60,14 @@ export class Store {
       );
     return this.get(id);
   }
+  extendTail(id, endAt) {
+    this.db
+      .prepare(
+        "UPDATE events SET end_at=max(end_at,?) WHERE id=? AND status='recording'",
+      )
+      .run(endAt, id);
+    return this.get(id);
+  }
   finish(id, { status = "ready", duration = 0, bytes = 0, error = null } = {}) {
     this.db
       .prepare(
