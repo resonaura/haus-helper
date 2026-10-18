@@ -91,3 +91,18 @@ test("rejects cross-site form writes and validates detector overrides", async (t
   });
   assert.equal(invalid.status, 400);
 });
+
+test("returns camera availability even on a day with no motion clips", async (t) => {
+  const { base, store, headers } = await fixture(t);
+  store.observeAvailability("camera.test", "offline", 1000);
+  store.observeAvailability("camera.test", "online", 5000);
+  const page = await (
+    await fetch(`${base}/api/events?camera_id=camera.test&from=2000&to=4000`, {
+      headers,
+    })
+  ).json();
+  assert.deepEqual(page.events, []);
+  assert.deepEqual(page.availability, [
+    { cameraId: "camera.test", startAt: 2000, endAt: 4000, state: "offline" },
+  ]);
+});

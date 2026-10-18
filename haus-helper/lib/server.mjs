@@ -138,22 +138,22 @@ export function createApi({
           ].includes(kind)
         )
           throw new Error("invalid_kind");
-        return json(
-          res,
-          200,
-          store.list({
-            cameraId:
-              getRegistry().cameras.find(
-                (item) =>
-                  item.id === cameraId || item.aliases?.includes(cameraId),
-              )?.id ?? cameraId,
-            from: number("from", 0),
-            to: number("to", Date.now() + 60000),
-            limit: Math.min(200, Math.max(1, number("limit", 60))),
-            cursor: url.searchParams.get("cursor") || undefined,
-            kind,
-          }),
-        );
+        const filters = {
+          cameraId:
+            getRegistry().cameras.find(
+              (item) =>
+                item.id === cameraId || item.aliases?.includes(cameraId),
+            )?.id ?? cameraId,
+          from: number("from", 0),
+          to: number("to", Date.now() + 60000),
+          limit: Math.min(200, Math.max(1, number("limit", 60))),
+          cursor: url.searchParams.get("cursor") || undefined,
+          kind,
+        };
+        return json(res, 200, {
+          ...store.list(filters),
+          availability: store.availability(filters),
+        });
       }
       const cameraMatch =
         /^\/api\/cameras\/(camera\.[a-z0-9_]+)(?:\/(record|snapshot))?$/.exec(

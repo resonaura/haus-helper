@@ -110,3 +110,41 @@ test("enforces storage and recording bounds", () => {
   ])
     assert.throws(() => validateOptions(options), /Invalid/);
 });
+
+test("availability records actual transitions, clips day boundaries and leaves unobserved restart gaps", async (t) => {
+  const store = await fixture(t);
+  store.observeAvailability("camera.entry", "online", 1000);
+  store.observeAvailability("camera.entry", "online", 11000);
+  store.observeAvailability("camera.entry", "offline", 16000);
+  store.observeAvailability("camera.entry", "offline", 26000);
+  store.observeAvailability("camera.entry", "online", 31000);
+  store.observeAvailability("camera.other", "offline", 2000);
+  assert.deepEqual(
+    store.availability({ cameraId: "camera.entry", from: 5000, to: 30000 }),
+    [
+      {
+        cameraId: "camera.entry",
+        startAt: 5000,
+        endAt: 16000,
+        state: "online",
+      },
+      {
+        cameraId: "camera.entry",
+        startAt: 16000,
+        endAt: 30000,
+        state: "offline",
+      },
+    ],
+  );
+  store.observeAvailability("camera.entry", "online", 100000);
+  const periods = store.availability({ cameraId: "camera.entry", to: 110000 });
+  assert.equal(periods.at(-2).endAt, 31000);
+  assert.equal(periods.at(-1).startAt, 100000);
+  assert.equal(periods.filter((item) => item.state === "offline").length, 1);
+  // A stale HA event cannot move the observation clock backwards.
+  store.observeAvailability("camera.entry", "offline", 30000);
+  assert.deepEqual(
+    store.availability({ cameraId: "camera.entry", to: 110000 }),
+    periods,
+  );
+});

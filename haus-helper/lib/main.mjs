@@ -17,6 +17,23 @@ let registry = { states: [], entities: [], devices: [], cameras: [] };
 let refreshing;
 let dirty = false;
 const recorder = new Recorder(config, ha, store);
+const observeAvailability = () => {
+  const at = Date.now();
+  for (const camera of registry.cameras) {
+    const state = registry.states.find(
+      (item) => item.entity_id === camera.id,
+    )?.state;
+    store.observeAvailability(
+      camera.id,
+      !ha.connected || !state || state === "unknown"
+        ? "unknown"
+        : camera.available
+          ? "online"
+          : "offline",
+      at,
+    );
+  }
+};
 const apply = () => {
   registry.cameras = discoverCameras(
     registry.states,
@@ -25,6 +42,7 @@ const apply = () => {
     store.overrides(),
   );
   recorder.sync(registry.cameras);
+  observeAvailability();
   if (config.recording_enabled)
     for (const camera of registry.cameras) {
       if (camera.available && camera.enabled && !recorder.active.has(camera.id))
@@ -54,6 +72,9 @@ ha.on("ready", () => {
   void refresh().catch(() =>
     console.warn("Camera discovery will retry after reconnection"),
   );
+});
+ha.on("status", () => {
+  if (!ha.connected) observeAvailability();
 });
 ha.on("event", (event) => {
   if (event.event_type.endsWith("_registry_updated")) {
@@ -88,7 +109,10 @@ ha.on("event", (event) => {
       } catch {}
     }
   }
-  if (id.startsWith("camera.")) recorder.sync(registry.cameras);
+  if (id.startsWith("camera.")) {
+    recorder.sync(registry.cameras);
+    observeAvailability();
+  }
 });
 const server = createApi({
   config,
@@ -110,11 +134,13 @@ const retention = setInterval(
   () => void store.prune(config).catch(() => {}),
   60000,
 );
+const availabilityHeartbeat = setInterval(observeAvailability, 10000);
 let stopping = false;
 async function stop() {
   if (stopping) return;
   stopping = true;
   clearInterval(retention);
+  clearInterval(availabilityHeartbeat);
   clearInterval(retry);
   ha.stop();
   server.close();

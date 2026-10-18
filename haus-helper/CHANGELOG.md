@@ -1,3 +1,7 @@
+## 0.1.6
+
+- Persist observed camera availability for offline bands in the Haus video timeline. Gaps while Haus or the server is disconnected remain unknown.
+
 ## 0.1.5
 
 - Give every video segment a unique session and sequence identity, use media timestamps for clip selection, and deduplicate manifests to prevent repeated footage.

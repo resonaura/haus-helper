@@ -10,7 +10,9 @@ export class Store {
     CREATE TABLE IF NOT EXISTS settings (id TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, camera_id TEXT NOT NULL, start_at INTEGER NOT NULL, end_at INTEGER NOT NULL, status TEXT NOT NULL, kinds TEXT NOT NULL, detections TEXT NOT NULL, duration REAL DEFAULT 0, bytes INTEGER DEFAULT 0, error TEXT);
     CREATE INDEX IF NOT EXISTS events_camera_time ON events(camera_id,start_at DESC,id DESC);
-    PRAGMA user_version=1;`);
+    CREATE TABLE IF NOT EXISTS camera_availability (camera_id TEXT NOT NULL, start_at INTEGER NOT NULL, end_at INTEGER NOT NULL, state TEXT NOT NULL, PRIMARY KEY(camera_id,start_at));
+    CREATE INDEX IF NOT EXISTS camera_availability_time ON camera_availability(camera_id,end_at);
+    PRAGMA user_version=2;`);
   }
   overrides() {
     return Object.fromEntries(
@@ -26,6 +28,47 @@ export class Store {
         "INSERT INTO settings(id,value) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET value=excluded.value",
       )
       .run(id, JSON.stringify(value));
+  }
+  observeAvailability(cameraId, state, at = Date.now()) {
+    if (!["online", "offline", "unknown"].includes(state))
+      throw new Error("invalid_availability");
+    const previous = this.db
+      .prepare(
+        "SELECT * FROM camera_availability WHERE camera_id=? ORDER BY start_at DESC LIMIT 1",
+      )
+      .get(cameraId);
+    if (previous && at < previous.end_at) return;
+    // Heartbeats stop at the last observation. A process outage is never labelled camera-offline.
+    if (previous && at - previous.end_at <= 45000) {
+      this.db
+        .prepare(
+          "UPDATE camera_availability SET end_at=? WHERE camera_id=? AND start_at=?",
+        )
+        .run(at, cameraId, previous.start_at);
+      if (previous.state === state) return;
+    }
+    this.db
+      .prepare(
+        "INSERT INTO camera_availability(camera_id,start_at,end_at,state) VALUES(?,?,?,?) ON CONFLICT(camera_id,start_at) DO UPDATE SET state=excluded.state,end_at=excluded.end_at",
+      )
+      .run(cameraId, at, at, state);
+  }
+  availability({ cameraId, from = 0, to = Date.now() } = {}) {
+    const args = [from, to];
+    const where = cameraId ? " AND camera_id=?" : "";
+    if (cameraId) args.push(cameraId);
+    return this.db
+      .prepare(
+        `SELECT * FROM camera_availability WHERE end_at>=? AND start_at<=?${where} ORDER BY start_at DESC LIMIT 5000`,
+      )
+      .all(...args)
+      .reverse()
+      .map((row) => ({
+        cameraId: row.camera_id,
+        startAt: Math.max(from, row.start_at),
+        endAt: Math.min(to, row.end_at),
+        state: row.state,
+      }));
   }
   create(cameraId, kind, at, endAt, sensorId) {
     const id = randomUUID();
@@ -165,6 +208,9 @@ export class Store {
   }
   async prune(options, now = Date.now()) {
     const cutoff = now - options.retention_days * 86400000;
+    this.db
+      .prepare("DELETE FROM camera_availability WHERE end_at<?")
+      .run(cutoff);
     const max = options.max_storage_gb * 1024 ** 3;
     let bytes = this.totals().bytes;
     let removed = 0;

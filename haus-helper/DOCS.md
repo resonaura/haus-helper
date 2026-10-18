@@ -36,3 +36,5 @@ Tests include automatic detector association, event merging, storage limits and 
 For standalone API development, set `HAUS_STANDALONE=1`, `HAUS_API_TOKEN`, `HAUS_HA_URL`, `HAUS_HA_TOKEN`, `HAUS_DATA`, and `HAUS_MEDIA`. Standalone API requests require a bearer token; the ordinary web UI is intended for authenticated Home Assistant Ingress. Never commit these environment values.
 
 The API is versioned by the application release and keeps service modules separate from the camera recorder so future local Haus services can be added without changing the recording model.
+
+Camera availability is observed from Home Assistant camera entity states and persisted separately from motion events. Offline bands mean the camera reported unavailable/off. Missing events do not mean offline. Server disconnections and periods before availability tracking are unknown; no past uptime is invented. Availability follows recording retention.
