@@ -200,7 +200,16 @@ test(
       attempt++
     )
       await pause(50);
+    if (buffer.process) await once(buffer.process, "close");
     const segments = await recorder.segments(buffer);
+    assert.equal(
+      new Set(segments.map((part) => part.path)).size,
+      segments.length,
+      "HLS batches never overwrite another pre-roll segment",
+    );
+    assert.ok(
+      segments.reduce((sum, part) => sum + part.end - part.start, 0) >= 4900,
+    );
     assert.ok(
       authorized > 1,
       "both playlist and segments carry authentication",

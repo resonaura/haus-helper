@@ -96,7 +96,9 @@ export class Recorder {
           "-rw_timeout",
           "15000000",
           "-live_start_index",
-          "-3",
+          "-1",
+          // Pace HTTP HLS batches so wall-clock segment names cannot collide.
+          "-re",
           "-headers",
           `Authorization: Bearer ${this.config.token}\r\n`,
           "-i",

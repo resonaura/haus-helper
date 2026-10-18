@@ -1,3 +1,7 @@
+## 0.1.4
+
+- Pace buffered HLS input in real time and start at the newest segment to preserve pre-roll without filename collisions.
+
 ## 0.1.3
 
 - Fix camera buffer process startup and verify authenticated HLS ingestion with real FFmpeg.

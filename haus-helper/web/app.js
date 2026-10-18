@@ -160,7 +160,7 @@ async function refresh(initial = false) {
         : "Recording paused"
       : "Home is reconnecting";
     $("storage").innerHTML =
-      `<b>${bytes(status.storage.bytes)} <span>of ${bytes(status.storage.maxBytes)}</span></b>${status.storage.count} saved moments`;
+      `<b>${bytes(status.storage.bytes)} <span>of ${bytes(status.storage.maxBytes)}</span></b>${status.storage.count} saved ${status.storage.count === 1 ? "moment" : "moments"}`;
     $("retention").textContent =
       `Stored locally · ${status.storage.retentionDays}-day retention`;
     const changed = JSON.stringify(cameras) !== JSON.stringify(result.cameras);
