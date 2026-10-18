@@ -1,3 +1,7 @@
+## 0.1.3
+
+- Fix camera buffer process startup and verify authenticated HLS ingestion with real FFmpeg.
+
 # 0.1.2
 
 - Continue long activity across bounded clips without fabricating detection events.

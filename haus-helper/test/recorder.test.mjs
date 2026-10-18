@@ -1,6 +1,16 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, writeFile, rm, stat } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  rm,
+  stat,
+  readFile,
+} from "node:fs/promises";
+import { createServer } from "node:http";
+import { once } from "node:events";
+import { setTimeout as pause } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../lib/store.mjs";
@@ -121,3 +131,84 @@ test("held motion extends the tail without inventing detections and rotates at t
   assert.notEqual(recorder.active.get("camera.test").id, old.id);
   assert.ok(store.recording().some((event) => event.id !== old.id));
 });
+
+test(
+  "starts an authenticated HLS camera and writes playable pre-roll segments",
+  { timeout: 30000 },
+  async (t) => {
+    const { root, dir, recorder, config } = await fixture(t);
+    const source = join(root, "source");
+    await mkdir(source);
+    await runMedia("ffmpeg", [
+      "-hide_banner",
+      "-loglevel",
+      "error",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=s=160x90:r=10",
+      "-t",
+      "5",
+      "-c:v",
+      "libx264",
+      "-g",
+      "10",
+      "-pix_fmt",
+      "yuv420p",
+      "-f",
+      "hls",
+      "-hls_time",
+      "1",
+      "-hls_list_size",
+      "0",
+      join(source, "index.m3u8"),
+    ]);
+    let authorized = 0;
+    const server = createServer(async (req, res) => {
+      if (req.headers.authorization !== "Bearer test-only") {
+        res.writeHead(401).end();
+        return;
+      }
+      authorized++;
+      const name = req.url?.slice(1);
+      if (!/^(index.m3u8|index\d+.ts)$/.test(name)) {
+        res.writeHead(404).end();
+        return;
+      }
+      try {
+        res.end(await readFile(join(source, name)));
+      } catch {
+        res.writeHead(404).end();
+      }
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    config.token = "test-only";
+    recorder.ha = {
+      stream: async () =>
+        `http://127.0.0.1:${server.address().port}/index.m3u8`,
+    };
+    const buffer = { id: "camera.test", dir, stopped: false };
+    recorder.buffers.set(buffer.id, buffer);
+    await recorder.startBuffer(buffer);
+    assert.notEqual(buffer.status, "unavailable", buffer.lastError);
+    for (
+      let attempt = 0;
+      attempt < 100 && !(await recorder.segments(buffer)).length;
+      attempt++
+    )
+      await pause(50);
+    const segments = await recorder.segments(buffer);
+    assert.ok(
+      authorized > 1,
+      "both playlist and segments carry authentication",
+    );
+    assert.ok(
+      segments.length > 0,
+      "camera produces finalized pre-roll segments",
+    );
+    assert.ok((await stat(segments.at(-1).path)).size > 0);
+  },
+);

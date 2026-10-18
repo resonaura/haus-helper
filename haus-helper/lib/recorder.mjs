@@ -85,7 +85,7 @@ export class Recorder {
       await mkdir(buffer.dir, { recursive: true, mode: 0o700 });
       const url = await this.ha.stream(buffer.id);
       if (this.stopped || buffer.stopped) return;
-      const process = spawn(
+      const child = spawn(
         "ffmpeg",
         [
           "-hide_banner",
@@ -129,19 +129,19 @@ export class Recorder {
           env: { ...process.env, TZ: "UTC" },
         },
       );
-      buffer.process = process;
+      buffer.process = child;
       buffer.status = "buffering";
       buffer.lastError = undefined;
-      process.stderr.on("data", () => {});
+      child.stderr.on("data", () => {});
       const exited = () => {
-        if (buffer.process !== process) return;
+        if (buffer.process !== child) return;
         buffer.process = undefined;
         buffer.status = "reconnecting";
         if (!buffer.stopped && !this.stopped)
           buffer.retry = setTimeout(() => void this.startBuffer(buffer), 15000);
       };
-      process.once("error", exited);
-      process.once("close", exited);
+      child.once("error", exited);
+      child.once("close", exited);
       this.onChange();
     } catch (error) {
       buffer.status = "unavailable";
