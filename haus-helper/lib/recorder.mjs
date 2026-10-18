@@ -10,7 +10,7 @@ import {
   statfs,
 } from "node:fs/promises";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { runMedia, probe } from "./media.mjs";
 export class Recorder {
   constructor(config, ha, store, onChange = () => {}) {
@@ -85,6 +85,8 @@ export class Recorder {
       await mkdir(buffer.dir, { recursive: true, mode: 0o700 });
       const url = await this.ha.stream(buffer.id);
       if (this.stopped || buffer.stopped) return;
+      const prefix = `b${Date.now()}-${randomUUID().slice(0, 8)}`;
+      buffer.listName = `${prefix}.csv`;
       const child = spawn(
         "ffmpeg",
         [
@@ -97,7 +99,7 @@ export class Recorder {
           "15000000",
           "-live_start_index",
           "-1",
-          // Pace HTTP HLS batches so wall-clock segment names cannot collide.
+          // Pace HTTP batches against their media clock.
           "-re",
           "-headers",
           `Authorization: Bearer ${this.config.token}\r\n`,
@@ -116,15 +118,13 @@ export class Recorder {
           "2",
           "-reset_timestamps",
           "1",
-          "-strftime",
-          "1",
           "-segment_list",
-          join(buffer.dir, "index.csv"),
+          join(buffer.dir, buffer.listName),
           "-segment_list_type",
           "csv",
           "-segment_list_size",
           "512",
-          join(buffer.dir, "%Y%m%dT%H%M%S.mp4"),
+          join(buffer.dir, `${prefix}-%09d.mp4`),
         ],
         {
           stdio: ["ignore", "ignore", "pipe"],
@@ -182,37 +182,22 @@ export class Recorder {
     return event;
   }
   async segments(buffer) {
-    try {
-      const csv = await readFile(join(buffer.dir, "index.csv"), "utf8");
-      return csv
-        .trim()
-        .split("\n")
-        .flatMap((line) => {
-          const match = /^"?([^",]+\.mp4)"?,([\d.]+),([\d.]+)$/.exec(line);
-          if (!match) return [];
-          const name = match[1].split("/").at(-1);
-          if (!/^\d{8}T\d{6}\.mp4$/.test(name)) return [];
-          const time = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})/.exec(
-            name,
-          );
-          const at = Date.UTC(
-            ...time
-              .slice(1)
-              .map((value, index) =>
-                index === 1 ? Number(value) - 1 : Number(value),
-              ),
-          );
-          return [
-            {
-              path: join(buffer.dir, name),
-              start: at,
-              end: at + Math.max(0, Number(match[3]) - Number(match[2])) * 1000,
-            },
-          ];
-        });
-    } catch {
-      return [];
-    }
+    const names = (await readdir(buffer.dir).catch(() => [])).filter(
+      (name) => name === "index.csv" || /^b\d{13}-[a-f0-9]{8}\.csv$/.test(name),
+    );
+    const parts = await Promise.all(
+      names.map(async (name) => {
+        const csv = await readFile(join(buffer.dir, name), "utf8").catch(
+          () => "",
+        );
+        return parseSegments(csv, buffer.dir);
+      }),
+    );
+    // Old versions could list the same overwritten wall-clock file more than once.
+    // Never concatenate one physical segment twice, including across reconnects.
+    return [
+      ...new Map(parts.flat().map((part) => [part.path, part])).values(),
+    ].sort((a, b) => a.start - b.start || a.path.localeCompare(b.path));
   }
   async tick() {
     if (this.tickBusy || this.stopped) return;
@@ -265,7 +250,18 @@ export class Recorder {
         );
         let total = 0;
         for (const name of await readdir(buffer.dir).catch(() => [])) {
-          if (!/^\d{8}T\d{6}\.mp4$/.test(name)) continue;
+          const isList =
+            name === "index.csv" || /^b\d{13}-[a-f0-9]{8}\.csv$/.test(name);
+          if (isList) {
+            if (name !== buffer.listName) {
+              const list = join(buffer.dir, name);
+              if ((await stat(list).catch(() => null))?.mtimeMs < cutoff)
+                await unlink(list).catch(() => {});
+            }
+            continue;
+          }
+          if (!/^(?:\d{8}T\d{6}|b\d{13}-[a-f0-9]{8}-\d{9,})\.mp4$/.test(name))
+            continue;
           const file = join(buffer.dir, name);
           const info = await stat(file).catch(() => null);
           if (!info) continue;
@@ -425,4 +421,39 @@ export class Recorder {
     while (this.finalizing.size && Date.now() < deadline)
       await new Promise((resolve) => setTimeout(resolve, 100));
   }
+}
+
+export function parseSegments(csv, directory) {
+  const segments = new Map();
+  for (const line of csv.trim().split("\n")) {
+    const row = /^"?([^",]+\.mp4)"?,([\d.]+),([\d.]+)$/.exec(line);
+    if (!row) continue;
+    const name = row[1].split("/").at(-1);
+    const sequential = /^b(\d{13})-[a-f0-9]{8}-\d{9,}\.mp4$/.exec(name);
+    const legacy = /^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})\.mp4$/.exec(
+      name,
+    );
+    const from = Number(row[2]),
+      to = Number(row[3]);
+    if (
+      (!sequential && !legacy) ||
+      !Number.isFinite(from) ||
+      !Number.isFinite(to) ||
+      to <= from
+    )
+      continue;
+    const start = sequential
+      ? Number(sequential[1]) + from * 1000
+      : Date.UTC(
+          ...legacy
+            .slice(1)
+            .map((value, index) =>
+              index === 1 ? Number(value) - 1 : Number(value),
+            ),
+        );
+    const path = join(directory, name);
+    if (Number.isFinite(start))
+      segments.set(path, { path, start, end: start + (to - from) * 1000 });
+  }
+  return [...segments.values()];
 }

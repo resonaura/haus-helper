@@ -1,3 +1,7 @@
+## 0.1.5
+
+- Give every video segment a unique session and sequence identity, use media timestamps for clip selection, and deduplicate manifests to prevent repeated footage.
+
 ## 0.1.4
 
 - Pace buffered HLS input in real time and start at the newest segment to preserve pre-roll without filename collisions.

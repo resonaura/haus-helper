@@ -14,7 +14,7 @@ import { setTimeout as pause } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Store } from "../lib/store.mjs";
-import { Recorder } from "../lib/recorder.mjs";
+import { Recorder, parseSegments } from "../lib/recorder.mjs";
 import { runMedia } from "../lib/media.mjs";
 import { defaults } from "../lib/config.mjs";
 async function fixture(t) {
@@ -221,3 +221,20 @@ test(
     assert.ok((await stat(segments.at(-1).path)).size > 0);
   },
 );
+
+test("batched segments have unique sequence identities and duplicate paths are never replayed", () => {
+  const prefix = "b1792298711085-a1b2c3d4";
+  const parts = parseSegments(
+    `${prefix}-000000000.mp4,0,2\n${prefix}-000000001.mp4,2,4\n${prefix}-000000002.mp4,4,6\n${prefix}-000000002.mp4,4,6`,
+    "/buffer",
+  );
+  assert.equal(parts.length, 3);
+  assert.equal(new Set(parts.map((part) => part.path)).size, 3);
+  assert.equal(parts[0].end, parts[1].start);
+  assert.equal(parts[2].end - parts[0].start, 6000);
+  assert.equal(
+    parseSegments("20261017T120000.mp4,0,2\n20261017T120000.mp4,2,4", "/buffer")
+      .length,
+    1,
+  );
+});
