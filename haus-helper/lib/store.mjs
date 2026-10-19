@@ -184,6 +184,7 @@ export class Store {
     cursor,
     limit = 60,
     kind,
+    direction = "older",
   } = {}) {
     const args = [from, to];
     let where = "start_at >= ? AND start_at <= ?";
@@ -191,9 +192,11 @@ export class Store {
       where += " AND camera_id=?";
       args.push(cameraId);
     }
+    const order = direction === "newer" ? "ASC" : "DESC";
     if (cursor) {
       const [at, id] = decodeCursor(cursor);
-      where += " AND (start_at < ? OR (start_at = ? AND id < ?))";
+      const operator = direction === "newer" ? ">" : "<";
+      where += ` AND (start_at ${operator} ? OR (start_at = ? AND id ${operator} ?))`;
       args.push(at, at, id);
     }
     if (kind) {
@@ -204,14 +207,20 @@ export class Store {
     args.push(Math.min(200, Math.max(1, limit)) + 1);
     const rows = this.db
       .prepare(
-        `SELECT * FROM events WHERE ${where} ORDER BY start_at DESC,id DESC LIMIT ?`,
+        `SELECT * FROM events WHERE ${where} ORDER BY start_at ${order},id ${order} LIMIT ?`,
       )
       .all(...args);
     const hasMore = rows.length > limit;
     const events = rows.slice(0, limit).map((row) => this.present(row));
     const last = events.at(-1);
+    const newest = direction === "newer" ? events.at(-1) : events[0];
     return {
-      events,
+      events: direction === "newer" ? events.reverse() : events,
+      newestCursor: newest
+        ? Buffer.from(JSON.stringify([newest.startAt, newest.id])).toString(
+            "base64url",
+          )
+        : null,
       nextCursor:
         hasMore && last
           ? Buffer.from(JSON.stringify([last.startAt, last.id])).toString(
@@ -219,6 +228,16 @@ export class Store {
             )
           : null,
     };
+  }
+  recordedDays({ cameraId, boundaries }) {
+    const query = this.db.prepare(
+      "SELECT 1 FROM events WHERE camera_id=? AND status='ready' AND start_at>=? AND start_at<? LIMIT 1",
+    );
+    return boundaries
+      .slice(0, -1)
+      .filter((start, index) =>
+        query.get(cameraId, start, boundaries[index + 1]),
+      );
   }
   recording() {
     return this.db

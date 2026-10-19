@@ -242,6 +242,35 @@ export function createApi({
               kind: detectionKind(state),
             })),
         });
+      if (req.method === "GET" && path === "/api/events/calendar") {
+        const requestedId = url.searchParams.get("camera_id");
+        if (!/^camera\.[a-z0-9_]+$/.test(requestedId ?? ""))
+          throw new Error("invalid_camera");
+        const boundaries = (url.searchParams.get("boundaries") ?? "")
+          .split(",")
+          .map(Number);
+        if (
+          boundaries.length < 2 ||
+          boundaries.length > 32 ||
+          boundaries.some(
+            (at, index) =>
+              !Number.isSafeInteger(at) ||
+              at < 0 ||
+              (index > 0 &&
+                (at <= boundaries[index - 1] ||
+                  at - boundaries[index - 1] > 48 * 3600000)),
+          )
+        )
+          throw new Error("invalid_calendar");
+        const cameraId =
+          getRegistry().cameras.find(
+            (item) =>
+              item.id === requestedId || item.aliases?.includes(requestedId),
+          )?.id ?? requestedId;
+        return json(res, 200, {
+          days: store.recordedDays({ cameraId, boundaries }),
+        });
+      }
       if (req.method === "GET" && path === "/api/events") {
         const cameraId = url.searchParams.get("camera_id") || undefined;
         if (cameraId && !/^camera\.[a-z0-9_]+$/.test(cameraId))
@@ -266,7 +295,11 @@ export function createApi({
           ].includes(kind)
         )
           throw new Error("invalid_kind");
+        const direction = url.searchParams.get("direction") ?? "older";
+        if (!["older", "newer"].includes(direction))
+          throw new Error("invalid_direction");
         const filters = {
+          direction,
           cameraId:
             getRegistry().cameras.find(
               (item) =>

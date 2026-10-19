@@ -106,3 +106,22 @@ test("returns camera availability even on a day with no motion clips", async (t)
     { cameraId: "camera.test", startAt: 2000, endAt: 4000, state: "offline" },
   ]);
 });
+
+test("calendar validates bounded local-day ranges and paged direction", async (t) => {
+  const { base, store, headers } = await fixture(t);
+  const event = store.create("camera.test", "motion", 2000, 3000);
+  store.finish(event.id, { duration: 1, bytes: 1 });
+  const response = await fetch(
+    `${base}/api/events/calendar?camera_id=camera.test&boundaries=1000,2000,4000`,
+    { headers },
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { days: [2000] });
+  for (const path of [
+    "/api/events/calendar?camera_id=camera.test&boundaries=3000,2000",
+    "/api/events/calendar?camera_id=../../secret&boundaries=1000,2000",
+    "/api/events?direction=arbitrary",
+  ]) {
+    assert.equal((await fetch(base + path, { headers })).status, 400);
+  }
+});
