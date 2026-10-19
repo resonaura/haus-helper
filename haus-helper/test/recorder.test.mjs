@@ -108,6 +108,57 @@ test("a missing camera buffer records an honest failure rather than an empty pla
   assert.equal(store.get(event.id).status, "failed");
   assert.equal(store.get(event.id).videoUrl, undefined);
 });
+test(
+  "restart recovers a pending event from its persisted pre-event ring without blocking new ingest",
+  { timeout: 30000 },
+  async (t) => {
+    const { recorder, store } = await fixture(t);
+    const dir = recorder.bufferDirectory("camera.test");
+    await mkdir(dir, { recursive: true });
+    const at = Date.now() - 12000,
+      prefix = `b${at}-a1b2c3d4`,
+      name = `${prefix}-000000000.mp4`;
+    await runMedia("ffmpeg", [
+      "-v",
+      "error",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=s=160x90:r=10",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=400:sample_rate=16000",
+      "-t",
+      "12",
+      "-c:v",
+      "libx264",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      join(dir, name),
+    ]);
+    await utimes(join(dir, name), new Date(at + 12000), new Date(at + 12000));
+    await writeFile(join(dir, `${prefix}.csv`), `${name},0,12\n`);
+    const event = store.create("camera.test", "motion", at + 8000, at + 12000);
+    await recorder.initialize();
+    assert.ok(recorder.timer);
+    assert.ok(recorder.finalizing.has(event.id));
+    for (
+      let index = 0;
+      index < 100 && store.get(event.id).status === "recording";
+      index++
+    )
+      await pause(50);
+    const recovered = store.get(event.id);
+    assert.equal(recovered.status, "ready");
+    assert.ok(recovered.duration >= 11.9);
+    assert.equal(recovered.startAt - recovered.mediaStartAt, 8000);
+    assert.equal(recovered.playbackInfo.audio, true);
+  },
+);
 
 test("a drifting source clock cannot hide pre-event footage from motion recordings", async (t) => {
   const { dir, recorder } = await fixture(t);

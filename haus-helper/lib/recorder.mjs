@@ -44,13 +44,36 @@ export class Recorder {
           bytes: file.size,
         });
       } catch {
-        this.store.finish(event.id, {
-          status: "interrupted",
-          error: "Recording interrupted by a restart",
+        const parts = await this.segments({
+          dir: this.bufferDirectory(event.cameraId),
         });
+        if (
+          parts.some(
+            (part) =>
+              part.end >= event.startAt - this.config.pre_roll_seconds * 1000 &&
+              part.start <= event.endAt,
+          )
+        ) {
+          // Ring segments survive upgrades; recovery must not delay fresh capture.
+          this.finalizing.add(event.id);
+          void this.finish(event)
+            .finally(() => this.finalizing.delete(event.id))
+            .catch(() => {});
+        } else
+          this.store.finish(event.id, {
+            status: "interrupted",
+            error: "Recording interrupted by a restart",
+          });
       }
     }
     this.timer = setInterval(() => void this.tick(), 2000);
+  }
+  bufferDirectory(id) {
+    return join(
+      this.config.data,
+      "buffer",
+      createHash("sha256").update(id).digest("hex").slice(0, 20),
+    );
   }
   sync(cameras) {
     this.cameras = cameras;
@@ -75,11 +98,7 @@ export class Recorder {
       if (!this.buffers.has(id)) {
         const buffer = {
           id,
-          dir: join(
-            this.config.data,
-            "buffer",
-            createHash("sha256").update(id).digest("hex").slice(0, 20),
-          ),
+          dir: this.bufferDirectory(id),
           status: "starting",
           stopped: false,
         };
@@ -519,7 +538,7 @@ export class Recorder {
           playbackVersion: PLAYBACK_VERSION,
           // The event starts at detection; the file starts in the pre-event ring.
           // Persist the actual boundary, including a keyframe-aligned extra segment.
-          mediaStartAt: ready[0].start,
+          mediaStartAt: Math.round(ready[0].start),
           error:
             ready.at(-1).end < event.endAt - 8000
               ? "Partial recording: the camera stream stopped"

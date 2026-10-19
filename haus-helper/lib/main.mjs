@@ -1,4 +1,5 @@
 import { WarmStreams } from "./warm-streams.mjs";
+import { Motion } from "./motion.mjs";
 import { SharedConfig } from "./shared-config.mjs";
 import { Backups } from "./backups.mjs";
 import { Cluster } from "./cluster.mjs";
@@ -37,6 +38,8 @@ let refreshing;
 let dirty = false;
 const recorder = new Recorder(config, ha, store);
 const warm = new WarmStreams(ha, recorder, cluster);
+const motion = new Motion({ ha, recorder, cluster, warm, config });
+await motion.initialize();
 const observeAvailability = () => {
   const at = Date.now();
   for (const camera of registry.cameras) {
@@ -63,6 +66,7 @@ const apply = () => {
   );
   recorder.sync(registry.cameras);
   warm.sync(registry.cameras);
+  motion.sync(registry.cameras);
   observeAvailability();
   if (config.recording_enabled)
     for (const camera of registry.cameras) {
@@ -133,6 +137,7 @@ ha.on("event", (event) => {
   if (id.startsWith("camera.")) {
     recorder.sync(registry.cameras);
     warm.sync(registry.cameras);
+    motion.sync(registry.cameras);
     observeAvailability();
   }
 });
@@ -147,6 +152,7 @@ const server = createApi({
   backups,
   shared,
   warm,
+  motion,
 });
 await recorder.initialize();
 ha.start();
@@ -169,12 +175,15 @@ const distribution = setInterval(
   10000,
 );
 const warming = setInterval(() => void warm.tick().catch(() => {}), 4000);
+const detection = setInterval(() => void motion.tick().catch(() => {}), 4000);
 const availabilityHeartbeat = setInterval(observeAvailability, 10000);
 let stopping = false;
 async function stop() {
   if (stopping) return;
   stopping = true;
   clearInterval(warming);
+  clearInterval(detection);
+  await motion.stop();
   await warm.stop();
   clearInterval(maintenance);
   clearInterval(distribution);

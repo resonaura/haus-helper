@@ -1,10 +1,13 @@
+FROM ghcr.io/resonaura/haus-nvr:0.2.1 AS vision
 FROM node:24-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates tini \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates tini python3 \
     && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY lib ./lib
+COPY --from=vision /opt/vision-env /opt/vision-env
+COPY --from=vision /app/vision ./vision
 COPY web ./web
 ENV NODE_ENV=production HAUS_DATA=/data HAUS_MEDIA=/media/haus
 EXPOSE 8099
