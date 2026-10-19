@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
+import { directRecordingInput } from "./recording-input.mjs";
 export class HaClient extends EventEmitter {
   constructor(config) {
     super();
@@ -8,6 +9,7 @@ export class HaClient extends EventEmitter {
     this.pending = new Map();
     this.connected = false;
     this.stopped = false;
+    this.inputRegistry = { states: [], entities: [] };
     this.retry = 0;
   }
   start() {
@@ -109,7 +111,29 @@ export class HaClient extends EventEmitter {
       this.request({ type: "config/entity_registry/list" }),
       this.request({ type: "config/device_registry/list" }),
     ]);
+    this.inputRegistry = { states, entities };
     return { states, entities, devices };
+  }
+  async recordingInput(camera, allowDirect = true) {
+    const direct =
+      allowDirect &&
+      directRecordingInput(
+        camera,
+        this.inputRegistry.states,
+        this.inputRegistry.entities,
+      );
+    return direct
+      ? {
+          url: direct,
+          kind: "rtsp",
+          inputArguments: ["-rtsp_transport", "tcp"],
+        }
+      : {
+          url: await this.stream(camera.id),
+          kind: "ha",
+          token: this.config.token,
+          inputArguments: ["-live_start_index", "-1", "-re"],
+        };
   }
   async stream(cameraId) {
     const result = await this.request({

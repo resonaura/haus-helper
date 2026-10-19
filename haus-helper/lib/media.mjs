@@ -79,7 +79,7 @@ export function parseRange(value, size) {
 }
 
 /** Discover late HLS audio before choosing an output stream map. No microphone is opened. */
-export async function sourceHasAudio(url, token, signal) {
+export async function sourceHasAudio(url, token, signal, inputArguments = []) {
   const { stdout } = await runMedia(
     "ffprobe",
     [
@@ -87,10 +87,10 @@ export async function sourceHasAudio(url, token, signal) {
       "error",
       "-rw_timeout",
       "15000000",
-      "-headers",
-      `Authorization: Bearer ${token}\r\n`,
+      ...(token ? ["-headers", `Authorization: Bearer ${token}\r\n`] : []),
       "-analyzeduration",
       "8000000",
+      ...inputArguments.filter((argument) => argument !== "-re"),
       "-probesize",
       "8000000",
       "-show_entries",
