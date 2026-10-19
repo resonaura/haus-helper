@@ -38,3 +38,7 @@ For standalone API development, set `HAUS_STANDALONE=1`, `HAUS_API_TOKEN`, `HAUS
 The API is versioned by the application release and keeps service modules separate from the camera recorder so future local Haus services can be added without changing the recording model.
 
 Camera availability is observed from Home Assistant camera entity states and persisted separately from motion events. Offline bands mean the camera reported unavailable/off. Missing events do not mean offline. Server disconnections and periods before availability tracking are unknown; no past uptime is invented. Availability follows recording retention.
+
+## Talkback
+
+Haus discovers an explicitly exposed `sensor.<camera>_talkback_rtmp_stream` with a private RTMP `/talk/` target. It does not infer audio input from RTSP or generic streaming support. The desktop microphone is opened only by the Talk action. Audio goes through authenticated HA ingress to FFmpeg and the camera; it is never written to storage by this endpoint. Leaving the camera, hiding the app, cancellation, disconnect or the one-minute limit stops the session. The API only returns capability availability, never the camera URL.

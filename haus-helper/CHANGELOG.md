@@ -1,3 +1,10 @@
+# 0.1.8
+
+- Add authenticated microphone streaming for cameras with a dedicated local Talkback RTMP sensor.
+- Transcode browser Opus to mono AAC using the existing FFmpeg runtime; stop on disconnect, timeout or client cancellation.
+- Keep camera addresses inside the add-on; the client receives only talkback availability.
+- Update the Haus icon with platform spacing and a neutral glass treatment.
+
 ## 0.1.7
 
 - Normalize saved video for reliable hardware decoding in macOS and desktop players.
