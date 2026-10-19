@@ -17,7 +17,7 @@ import {
 } from "node:fs/promises";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { runMedia, probe } from "./media.mjs";
+import { runMedia, probe, sourceHasAudio } from "./media.mjs";
 export class Recorder {
   constructor(config, ha, store, onChange = () => {}) {
     this.config = config;
@@ -65,6 +65,7 @@ export class Recorder {
     for (const [id, buffer] of this.buffers) {
       if (!enabled.has(id)) {
         buffer.stopped = true;
+        buffer.probeAbort?.abort();
         this.terminateBuffer(buffer);
         clearTimeout(buffer.retry);
         this.buffers.delete(id);
@@ -108,6 +109,17 @@ export class Recorder {
       await mkdir(buffer.dir, { recursive: true, mode: 0o700 });
       const url = await this.ha.stream(buffer.id);
       if (this.stopped || buffer.stopped) return;
+      if (this.config.record_audio) {
+        const abort = new AbortController();
+        buffer.probeAbort = abort;
+        buffer.expectedAudio = await sourceHasAudio(
+          url,
+          this.config.token,
+          AbortSignal.any([abort.signal, this.playbackAbort.signal]),
+        ).catch(() => undefined);
+        if (buffer.probeAbort === abort) buffer.probeAbort = undefined;
+      }
+      if (this.stopped || buffer.stopped) return;
       const prefix = `b${Date.now()}-${randomUUID().slice(0, 8)}`;
       buffer.listName = `${prefix}.csv`;
       const child = spawn(
@@ -124,6 +136,10 @@ export class Recorder {
           "1",
           "-rw_timeout",
           "15000000",
+          "-analyzeduration",
+          "8000000",
+          "-probesize",
+          "8000000",
           "-live_start_index",
           "-1",
           // Pace HTTP batches against their media clock.
@@ -135,7 +151,14 @@ export class Recorder {
           "-map",
           "0:v:0",
           ...(this.config.record_audio
-            ? ["-map", "0:a?", "-c:a", "aac", "-b:a", "96k"]
+            ? [
+                "-map",
+                buffer.expectedAudio ? "0:a:0" : "0:a?",
+                "-c:a",
+                "aac",
+                "-b:a",
+                "96k",
+              ]
             : ["-an"]),
           "-c:v",
           "copy",
@@ -476,6 +499,7 @@ export class Recorder {
       cameraId: buffer.id,
       status: buffer.status,
       error: buffer.lastError,
+      audioExpected: buffer.expectedAudio,
     }));
   }
   async preparePlayback(event, priority = 20) {
@@ -548,6 +572,7 @@ export class Recorder {
     clearInterval(this.timer);
     for (const buffer of this.buffers.values()) {
       buffer.stopped = true;
+      buffer.probeAbort?.abort();
       clearTimeout(buffer.retry);
       this.terminateBuffer(buffer);
     }

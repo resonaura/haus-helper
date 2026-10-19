@@ -1,3 +1,7 @@
+# 0.2.7
+
+- Probe authenticated HLS audio before selecting recording tracks, allow longer audio discovery, and require the advertised track so an audio-capable source cannot silently start a video-only buffer. Probes cancel when recording stops; sources without audio still retain their video.
+
 # 0.2.6
 
 - Allow authenticated, seekable reads of original recordings for integrity and source timing/audio audits without compatibility encoding or changing the source files. Normal app playback still uses prepared compatible media.
