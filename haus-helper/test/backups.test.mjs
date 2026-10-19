@@ -70,3 +70,56 @@ test("hot backup hook captures a consistent committed database while the live WA
   await assert.rejects(() => stat(join(root, "restore")));
   assert.equal(store.list().events.length, 2);
 });
+
+test("failed automatic backups retain exponential cooldown across restarts; manual success clears it", async (t) => {
+  const { backups, store, root } = await fixture(t);
+  await backups.snapshot("haus");
+  backups.config.standalone = false;
+  backups.config.ha_backups_enabled = true;
+  let calls = 0;
+  backups.supervisor = async () => {
+    calls++;
+    throw new Error("supervisor_busy");
+  };
+  const before = Date.now();
+  await assert.rejects(() => backups.snapshot("ha"), /supervisor_busy/);
+  const retry = () =>
+    store.db.prepare("SELECT * FROM haus_backup_retries WHERE kind='ha'").get();
+  assert.equal(retry().failures, 1);
+  assert.ok(retry().next_at >= before + 300000);
+  await backups.tick();
+  await backups.tick();
+  assert.equal(
+    calls,
+    1,
+    "15-second maintenance ticks must not hammer Supervisor",
+  );
+  const resumed = new Backups(
+    { data: root, standalone: false, ha_backups_enabled: true },
+    store,
+  );
+  await resumed.initialize();
+  resumed.supervisor = backups.supervisor;
+  await resumed.tick();
+  assert.equal(calls, 1, "restarting the helper must retain the cooldown");
+  store.db
+    .prepare("UPDATE haus_backup_retries SET next_at=0 WHERE kind='ha'")
+    .run();
+  await assert.rejects(() => resumed.tick(), /supervisor_busy/);
+  assert.equal(calls, 2);
+  assert.equal(retry().failures, 2);
+  assert.ok(retry().next_at >= Date.now() + 599000);
+  resumed.supervisor = async (path, init) => {
+    if (init?.method === "POST")
+      return Response.json({
+        result: "ok",
+        data: { slug: "owned-retry-fixture" },
+      });
+    return new Response("synthetic-ha-archive");
+  };
+  await resumed.snapshot("ha"); // An explicit retry remains available during automatic cooldown.
+  assert.equal(retry(), undefined);
+  assert.equal(resumed.error, undefined);
+  assert.equal(resumed.list().filter((item) => item.kind === "ha").length, 1);
+  await resumed.stop();
+});
