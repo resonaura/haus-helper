@@ -423,7 +423,7 @@ export function createApi({
         return;
       }
       const eventMatch =
-        /^\/api\/events\/([a-f0-9-]{36})(?:\/(video|thumbnail|prepare|prepare-next|source))?$/.exec(
+        /^\/api\/events\/([a-f0-9-]{36})(?:\/(video|thumbnail|prepare|prepare-next|source|original))?$/.exec(
           path,
         );
       if (eventMatch && ["GET", "HEAD"].includes(req.method)) {
@@ -443,12 +443,13 @@ export function createApi({
           );
           return json(res, 200, store.get(event.id));
         }
-        const type = eventMatch[2] === "video" ? "mp4" : "jpg";
+        const original = eventMatch[2] === "original";
+        const type = original || eventMatch[2] === "video" ? "mp4" : "jpg";
         const file =
-          type === "mp4" && recorder.preparePlayback
+          type === "mp4" && !original && recorder.preparePlayback
             ? await recorder.preparePlayback(event)
             : store.path(event.id, type);
-        if (type === "mp4" && cluster && req.method === "GET") {
+        if (type === "mp4" && !original && cluster && req.method === "GET") {
           const abort = new AbortController();
           res.once("close", () => abort.abort());
           const remote = await cluster.media(

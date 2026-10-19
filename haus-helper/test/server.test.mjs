@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Store } from "../lib/store.mjs";
 import { createApi } from "../lib/server.mjs";
-async function fixture(t) {
+async function fixture(t, recorderOverrides = {}) {
   const root = await mkdtemp(join(tmpdir(), "haus-api-"));
   const media = join(root, "media");
   await mkdir(media);
@@ -26,7 +26,11 @@ async function fixture(t) {
     },
     ha: { connected: true },
     store,
-    recorder: { status: () => [], trigger: () => ({ id: "pending" }) },
+    recorder: {
+      status: () => [],
+      trigger: () => ({ id: "pending" }),
+      ...recorderOverrides,
+    },
     getRegistry: () => ({ cameras: [camera], states: [] }),
     refresh: async () => {},
   });
@@ -124,4 +128,26 @@ test("calendar validates bounded local-day ranges and paged direction", async (t
   ]) {
     assert.equal((await fetch(base + path, { headers })).status, 400);
   }
+});
+
+test("original recording reads stay authenticated and bypass compatibility encoding", async (t) => {
+  let prepared = 0;
+  const { base, store, headers } = await fixture(t, {
+    preparePlayback: async () => {
+      prepared++;
+      throw new Error("should_not_encode");
+    },
+  });
+  const event = store.create("camera.test", "motion", 1000, 3000);
+  await writeFile(store.path(event.id), "original-camera-media");
+  store.finish(event.id, { bytes: 21, duration: 2 });
+  const url = `${base}/api/events/${event.id}/original`;
+  assert.equal((await fetch(url)).status, 401);
+  const response = await fetch(url, {
+    headers: { ...headers, Range: "bytes=0-7" },
+  });
+  assert.equal(response.status, 206);
+  assert.equal(await response.text(), "original");
+  assert.equal(prepared, 0);
+  assert.equal(store.get(event.id).playbackVersion, 0);
 });

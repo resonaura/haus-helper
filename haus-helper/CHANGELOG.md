@@ -1,3 +1,7 @@
+# 0.2.6
+
+- Allow authenticated, seekable reads of original recordings for integrity and source timing/audio audits without compatibility encoding or changing the source files. Normal app playback still uses prepared compatible media.
+
 # 0.2.5
 
 - Reconnect when recorder frame progress stalls and forcibly reap encoders that ignore shutdown.
