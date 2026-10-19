@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { isIP } from "node:net";
 import { pipeline } from "node:stream/promises";
 
 /** A dedicated HA talkback sensor is authoritative; streaming support alone is not. */
@@ -16,7 +17,8 @@ export function talkbackTarget(camera, registry) {
     const url = new URL(sensor.state);
     const host = url.hostname;
     const local =
-      /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host) ||
+      (isIP(host) === 4 &&
+        /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) ||
       host === "localhost" ||
       host.endsWith(".local") ||
       host.endsWith(".lan");
