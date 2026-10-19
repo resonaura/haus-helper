@@ -129,3 +129,30 @@ test("canonicalizes matching Generic wrappers and inherits their internal device
   );
   assert.equal(cameras[1].sensors.length, 0);
 });
+
+test("battery warming policy uses physical aliases and ignores unassigned sensors", () => {
+  const states = [
+    state("camera.outdoor", "Outdoor"),
+    state("camera.outdoor_internal", "Outdoor Internal"),
+    state("camera.desk", "Desk"),
+    state("sensor.outdoor_battery", "Battery", "battery"),
+    state("sensor.unassigned_battery", "Battery", "battery"),
+  ];
+  const cameras = discoverCameras(
+    states,
+    [
+      { entity_id: "camera.outdoor", platform: "generic" },
+      { entity_id: "camera.outdoor_internal", device_id: "physical" },
+      { entity_id: "sensor.outdoor_battery", device_id: "physical" },
+    ],
+    [],
+  );
+  assert.equal(
+    cameras.find((camera) => camera.id === "camera.outdoor").batteryPowered,
+    true,
+  );
+  assert.equal(
+    cameras.find((camera) => camera.id === "camera.desk").batteryPowered,
+    false,
+  );
+});

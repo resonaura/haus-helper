@@ -102,6 +102,11 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
       camera.deviceId,
       ...camera.aliases.map((id) => registry.get(id)?.device_id),
     ].filter(Boolean);
+    camera.batteryPowered = states.some(
+      (sensor) =>
+        camera.deviceIds.includes(registry.get(sensor.entity_id)?.device_id) &&
+        sensor.attributes?.device_class === "battery",
+    );
   }
   for (const state of visible) {
     const kind = detectionKind(state);

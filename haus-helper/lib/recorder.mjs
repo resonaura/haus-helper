@@ -1,3 +1,9 @@
+import { MediaQueue } from "./media-queue.mjs";
+import {
+  PLAYBACK_VERSION,
+  playbackArguments,
+  inspectCadence,
+} from "./playback.mjs";
 import { spawn } from "node:child_process";
 import {
   mkdir,
@@ -22,7 +28,8 @@ export class Recorder {
     this.active = new Map();
     this.finalizing = new Set();
     this.playbackJobs = new Map();
-    this.playbackQueue = Promise.resolve();
+    this.encoding = new MediaQueue();
+    this.playbackPriorities = new Map();
     this.playbackAbort = new AbortController();
     this.stopped = false;
     this.tickBusy = false;
@@ -315,52 +322,47 @@ export class Recorder {
         if (await stat(part.path).catch(() => null)) ready.push(part);
       if (!ready.length) throw new Error("no_video");
       const manifest = join(this.config.data, `${event.id}.concat`);
+      const output = this.store.path(event.id);
+      const temporary = output.replace(".mp4", ".partial.mp4");
       await writeFile(
         manifest,
         ready
-          .map((part) => `file '${part.path.replaceAll("'", "'\\''")}'`)
+          .map(
+            (part) =>
+              `file '${part.path.replaceAll("'", "'\\''")}'\nduration ${((part.end - part.start) / 1000).toFixed(6)}`,
+          )
           .join("\n"),
         { mode: 0o600 },
       );
       try {
-        const output = this.store.path(event.id);
-        const temporary = output.replace(".mp4", ".partial.mp4");
-        await runMedia(
-          "ffmpeg",
-          [
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-y",
-            "-f",
-            "concat",
-            "-safe",
-            "0",
-            "-i",
-            manifest,
-            ...(this.config.record_audio
-              ? ["-c:a", "aac", "-b:a", "96k"]
-              : ["-an"]),
-            "-c:v",
-            // Camera bitstreams can contain parameter changes that software decoders
-            // recover from but VideoToolbox rejects mid-clip. Normalize once at save time.
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "20",
-            "-threads",
-            "2",
-            "-pix_fmt",
-            "yuv420p",
-            "-fps_mode",
-            "vfr",
-            "-movflags",
-            "+faststart",
-            temporary,
-          ],
-          { timeout: Math.max(120000, this.config.max_event_seconds * 1500) },
+        await this.encoding.run(
+          () =>
+            runMedia(
+              "ffmpeg",
+              [
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-y",
+                "-f",
+                "concat",
+                "-safe",
+                "0",
+                "-i",
+                manifest,
+                ...(this.config.record_audio
+                  ? ["-c:a", "aac", "-b:a", "96k"]
+                  : ["-an"]),
+                ...playbackArguments(),
+                temporary,
+              ],
+              {
+                timeout: Math.max(120000, this.config.max_event_seconds * 1500),
+                signal: this.playbackAbort.signal,
+              },
+            ),
+          10,
         );
         const info = await probe(temporary);
         if (info.duration < 0.1) throw new Error("empty_video");
@@ -383,13 +385,13 @@ export class Recorder {
             "scale=640:-2:flags=area",
             this.store.path(event.id, "jpg"),
           ],
-          { timeout: 20000 },
+          { timeout: 20000, signal: this.playbackAbort.signal },
         ).catch(() => {});
         const file = await stat(output);
         this.store.finish(event.id, {
           duration: info.duration,
           bytes: file.size,
-          playbackVersion: 1,
+          playbackVersion: PLAYBACK_VERSION,
           error:
             ready.at(-1).end < event.endAt - 8000
               ? "Partial recording: the camera stream stopped"
@@ -397,8 +399,10 @@ export class Recorder {
         });
       } finally {
         await unlink(manifest).catch(() => {});
+        await unlink(temporary).catch(() => {});
       }
     } catch (error) {
+      if (this.stopped) return;
       this.store.finish(event.id, {
         status: "failed",
         error:
@@ -416,69 +420,72 @@ export class Recorder {
       error: buffer.lastError,
     }));
   }
-  async preparePlayback(event) {
-    if (event.playbackVersion === 1)
+  async preparePlayback(event, priority = 20) {
+    if (event.playbackVersion === PLAYBACK_VERSION)
       return this.store.path(
         event.id,
         event.playbackBytes ? "playback.mp4" : "mp4",
       );
-    if (this.playbackJobs.has(event.id)) return this.playbackJobs.get(event.id);
-    const job = this.playbackQueue.then(async () => {
+    if (this.playbackJobs.has(event.id)) {
+      const existing = this.playbackPriorities.get(event.id);
+      if (existing) existing.value = Math.max(existing.value, priority);
+      this.encoding.promote(event.id, priority);
+      return this.playbackJobs.get(event.id);
+    }
+    if (this.playbackJobs.size >= 4) throw new Error("playback_queue_busy");
+    const urgency = { value: priority };
+    this.playbackPriorities.set(event.id, urgency);
+    const job = (async () => {
       const output = this.store.path(event.id, "playback.mp4");
       const temporary = output.replace(".mp4", ".partial.mp4");
       try {
-        await runMedia(
-          "ffmpeg",
-          [
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-nostdin",
-            "-y",
-            "-i",
-            this.store.path(event.id),
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "20",
-            "-threads",
-            "2",
-            "-pix_fmt",
-            "yuv420p",
-            "-fps_mode",
-            "vfr",
-            "-c:a",
-            "aac",
-            "-b:a",
-            "96k",
-            "-movflags",
-            "+faststart",
-            temporary,
-          ],
-          {
-            timeout: Math.max(120000, event.duration * 2000),
-            signal: this.playbackAbort.signal,
-          },
+        const diagnostics = await inspectCadence(this.store.path(event.id));
+        await this.encoding.run(
+          () =>
+            runMedia(
+              "ffmpeg",
+              [
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-nostdin",
+                "-y",
+                "-i",
+                this.store.path(event.id),
+                ...playbackArguments(),
+                temporary,
+              ],
+              {
+                timeout: Math.max(120000, event.duration * 2000),
+                signal: this.playbackAbort.signal,
+              },
+            ),
+          urgency.value,
+          event.id,
         );
         const info = await probe(temporary);
         if (info.duration < 0.1) throw new Error("empty_video");
         await rename(temporary, output);
-        this.store.setPlayback(event.id, (await stat(output)).size);
+        this.store.setPlayback(
+          event.id,
+          (await stat(output)).size,
+          PLAYBACK_VERSION,
+          diagnostics,
+        );
         return output;
       } finally {
         await unlink(temporary).catch(() => {});
         this.playbackJobs.delete(event.id);
+        this.playbackPriorities.delete(event.id);
       }
-    });
-    this.playbackQueue = job.catch(() => {});
+    })();
     this.playbackJobs.set(event.id, job);
     return job;
   }
   async stop() {
     this.stopped = true;
     this.playbackAbort.abort();
+    this.encoding.stop();
     await Promise.allSettled([...this.playbackJobs.values()]);
     clearInterval(this.timer);
     for (const buffer of this.buffers.values()) {

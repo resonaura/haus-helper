@@ -25,7 +25,9 @@ export class Store {
       this.db.exec(
         "ALTER TABLE events ADD COLUMN playback_bytes INTEGER DEFAULT 0",
       );
-    this.db.exec("PRAGMA user_version=3");
+    if (!columns.includes("playback_info"))
+      this.db.exec("ALTER TABLE events ADD COLUMN playback_info TEXT");
+    this.db.exec("PRAGMA user_version=4");
   }
   overrides() {
     return Object.fromEntries(
@@ -145,12 +147,12 @@ export class Store {
     const row = this.db.prepare("SELECT * FROM events WHERE id=?").get(id);
     return row && this.present(row);
   }
-  setPlayback(id, bytes) {
+  setPlayback(id, bytes, version = 1, diagnostics = {}) {
     this.db
       .prepare(
-        "UPDATE events SET playback_version=1,playback_bytes=? WHERE id=?",
+        "UPDATE events SET playback_version=?,playback_bytes=?,playback_info=? WHERE id=?",
       )
-      .run(bytes, id);
+      .run(version, bytes, JSON.stringify(diagnostics), id);
   }
   present(row) {
     return {
@@ -166,6 +168,9 @@ export class Store {
       error: row.error,
       playbackVersion: row.playback_version,
       playbackBytes: row.playback_bytes,
+      playbackInfo: row.playback_info
+        ? JSON.parse(row.playback_info)
+        : undefined,
       videoUrl:
         row.status === "ready" ? `api/events/${row.id}/video` : undefined,
       thumbnailUrl:

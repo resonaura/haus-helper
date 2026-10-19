@@ -1,5 +1,9 @@
 import { spawn } from "node:child_process";
-export function runMedia(command, args, { timeout = 120000, signal } = {}) {
+export function runMedia(
+  command,
+  args,
+  { timeout = 120000, signal, maxOutput = 256000 } = {},
+) {
   return new Promise((resolve, reject) => {
     const process = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
@@ -11,7 +15,7 @@ export function runMedia(command, args, { timeout = 120000, signal } = {}) {
       process.kill("SIGKILL");
     }, timeout);
     process.stdout.on("data", (data) => {
-      if (stdout.length < 256000) stdout += data;
+      if (stdout.length < maxOutput) stdout += data;
     });
     process.stderr.on("data", (data) => {
       stderr = (stderr + data).slice(-8000);

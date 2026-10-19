@@ -111,6 +111,20 @@ test("enforces storage and recording bounds", () => {
     assert.throws(() => validateOptions(options), /Invalid/);
 });
 
+test("Eufy endpoints reject public hosts disguised as private IPs", () => {
+  for (const eufy_ws_url of [
+    "ws://192.168.example.com:3000",
+    "ws://10.example.com:3000",
+    "ws://8.8.8.8:3000",
+    "ws://user:secret@localhost:3000",
+  ])
+    assert.throws(() => validateOptions({ eufy_ws_url }), /Invalid/);
+  assert.equal(
+    validateOptions({ eufy_ws_url: "ws://192.168.4.44:3000" }).eufy_ws_url,
+    "ws://192.168.4.44:3000/",
+  );
+});
+
 test("availability records actual transitions, clips day boundaries and leaves unobserved restart gaps", async (t) => {
   const store = await fixture(t);
   store.observeAvailability("camera.entry", "online", 1000);

@@ -1,8 +1,11 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
+import { isIP } from "node:net";
 export const defaults = Object.freeze({
   recording_enabled: true,
   record_audio: true,
+  ha_backups_enabled: true,
+  eufy_ws_url: "",
   pre_roll_seconds: 8,
   post_roll_seconds: 20,
   max_event_seconds: 300,
@@ -27,11 +30,32 @@ export function validateOptions(input = {}) {
       result[key] = input[key];
     }
   }
-  for (const key of ["recording_enabled", "record_audio"])
+  for (const key of ["recording_enabled", "record_audio", "ha_backups_enabled"])
     if (input[key] !== undefined) {
       if (typeof input[key] !== "boolean") throw new Error(`Invalid ${key}`);
       result[key] = input[key];
     }
+  if (input.eufy_ws_url) {
+    const url = new URL(input.eufy_ws_url);
+    if (
+      !["ws:", "wss:"].includes(url.protocol) ||
+      url.username ||
+      url.password ||
+      url.hash ||
+      url.search ||
+      !(
+        (isIP(url.hostname) === 4 &&
+          /^(?:127\.|10\.|192\.168\.|172\.(?:1[6-9]|2\d|3[01])\.)/.test(
+            url.hostname,
+          )) ||
+        url.hostname === "localhost" ||
+        url.hostname.endsWith(".local") ||
+        url.hostname.endsWith(".lan")
+      )
+    )
+      throw new Error("Invalid Eufy WebSocket address");
+    result.eufy_ws_url = url.href;
+  }
   return result;
 }
 export async function loadConfig() {
