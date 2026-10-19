@@ -24,8 +24,9 @@ export function eufyEndpoint(
       };
       cached = undefined;
       try {
-        const list = await get("/addons");
-        const apps = list.addons.filter(
+        // The backup role permits */info but intentionally cannot enumerate /addons.
+        const list = await get("/supervisor/info");
+        const apps = (list?.addons ?? []).filter(
           (app) =>
             /(?:^|_)eufy_security_ws$/.test(app.slug) &&
             app.state === "started",
