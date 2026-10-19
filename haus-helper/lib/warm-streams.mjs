@@ -25,8 +25,10 @@ export class WarmStreams {
     for (const entry of this.entries.values())
       if (!available.has(entry.id)) void this.release(entry).catch(() => {});
   }
-  async touch(camera, owner, active) {
+  async touch(camera, owner, active, preview = false) {
     if (this.stopped) return { warm: false, reason: "stopped" };
+    if (active && preview && camera.batteryPowered)
+      return { warm: false, reason: "battery" };
     if (active && camera.available === false)
       return { warm: false, reason: "unavailable" };
     if (
@@ -35,6 +37,8 @@ export class WarmStreams {
       owner.length > 80
     )
       throw new Error("invalid_warm_session");
+    if (active && this.recorder.buffers?.get(camera.id)?.status === "buffering")
+      return { warm: true, source: "recording" };
     let entry = this.entries.get(camera.id);
     if (!active) {
       if (entry) {
@@ -142,21 +146,69 @@ export class WarmStreams {
     }
   }
   async tick() {
-    const now = this.now();
-    for (const entry of this.entries.values()) {
-      for (const [owner, until] of entry.owners)
-        if (until < now) entry.owners.delete(owner);
-      if ((!entry.owners.size && entry.expires <= now) || this.stopped) {
-        await this.release(entry);
-        continue;
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      const now = this.now();
+      for (const entry of this.entries.values()) {
+        for (const [owner, until] of entry.owners)
+          if (until < now) entry.owners.delete(owner);
+        if ((!entry.owners.size && entry.expires <= now) || this.stopped) {
+          await this.release(entry);
+          continue;
+        }
+        if (entry.job) {
+          try {
+            const response = await nodeRequest(
+              entry.job.node,
+              `/v1/streams/${entry.job.id}/index.m3u8`,
+              { timeout: 5000 },
+            );
+            await response.body?.cancel();
+            if (!response.ok) throw new Error("node_stream_unavailable");
+            entry.failures = 0;
+          } catch {
+            if ((entry.failures = (entry.failures ?? 0) + 1) >= 3) {
+              const old = entry.job;
+              entry.job = undefined;
+              if (entry.lease) this.leases.delete(entry.lease);
+              entry.lease = undefined;
+              entry.failures = 0;
+              await nodeRequest(old.node, `/v1/streams/${old.id}`, {
+                method: "DELETE",
+                timeout: 5000,
+              })
+                .then((res) => res.body?.cancel())
+                .catch(() => {});
+              try {
+                await this.start(entry);
+              } catch {}
+            }
+          }
+          continue;
+        }
+        if (!entry.source || this.recorder.buffers?.has(entry.id)) continue;
+        // Fetch only manifests; no background decoder, audio track or microphone is kept alive.
+        try {
+          const response = await this.ha.media(entry.source);
+          await response.body?.cancel();
+          if (!response.ok) throw new Error("warm_source_unavailable");
+          entry.failures = 0;
+        } catch {
+          if ((entry.failures = (entry.failures ?? 0) + 1) >= 3) {
+            entry.failures = 0;
+            try {
+              const source = await this.ha.stream(entry.id);
+              if (this.entries.get(entry.id) === entry && !this.stopped)
+                entry.source = source;
+            } catch {
+              /* A later tick retries while the lease remains valid. */
+            }
+          }
+        }
       }
-      if (!entry.source || entry.job || this.recorder.buffers?.has(entry.id))
-        continue;
-      // Fetch only manifests; no background decoder, audio track or microphone is kept alive.
-      try {
-        const response = await this.ha.media(entry.source);
-        await response.body?.cancel();
-      } catch {}
+    } finally {
+      this.ticking = false;
     }
   }
   async release(entry) {

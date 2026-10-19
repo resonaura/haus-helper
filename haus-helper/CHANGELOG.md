@@ -1,3 +1,10 @@
+# 0.2.5
+
+- Reconnect when recorder frame progress stalls and forcibly reap encoders that ignore shutdown.
+- Reuse healthy recording buffers for preview preheat; never wake battery cameras for dashboard previews.
+- Reacquire failed HLS sources and restart lost NVR relays while keeping leases and work bounded.
+- Preserve and report actual recorded audio through finalization; validate real H264/AAC output.
+
 # 0.2.4
 
 - Page camera recordings in both directions across days without repeating clips, including equal timestamps.

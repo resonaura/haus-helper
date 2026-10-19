@@ -298,3 +298,32 @@ test(
     await assert.rejects(stat(paths[0]), { code: "ENOENT" });
   },
 );
+
+test(
+  "a stalled recorder is terminated, then forcibly reaped if it ignores shutdown",
+  { timeout: 8000 },
+  async (t) => {
+    const { recorder, dir } = await fixture(t);
+    const { EventEmitter } = await import("node:events");
+    const child = new EventEmitter();
+    const signals = [];
+    child.kill = (signal) => {
+      signals.push(signal);
+      if (signal === "SIGKILL") {
+        child.exitCode = 137;
+        child.emit("close");
+      }
+    };
+    child.exitCode = null;
+    recorder.buffers.set("camera.test", {
+      dir,
+      process: child,
+      lastAdvance: Date.now() - 31000,
+      status: "buffering",
+    });
+    await recorder.tick();
+    assert.deepEqual(signals, ["SIGTERM"]);
+    await pause(3100);
+    assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
+  },
+);
