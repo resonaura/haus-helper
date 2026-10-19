@@ -259,7 +259,12 @@ export class WarmStreams {
         entry.byUrl.delete(oldest[1]);
       }
     }
-    const id = randomBytes(12).toString("hex");
+    // Preserve only media extensions, never the private HA path. Recent FFmpeg
+    // HLS demuxers reject opaque extensionless fragments before decoding them.
+    const extension = /\.(m3u8|ts|m4s|mp4|aac|key)$/i.exec(url.pathname)?.[1];
+    const id =
+      randomBytes(12).toString("hex") +
+      (extension ? `.${extension.toLowerCase()}` : "");
     entry.resources.set(id, url.href);
     entry.byUrl.set(url.href, id);
     return id;

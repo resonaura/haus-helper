@@ -68,7 +68,9 @@ export function createApi({
       if (path === "/health" && ["127.0.0.1", "::1"].includes(address))
         return json(res, 200, { status: "ok" });
       const sourceMatch =
-        /^\/cluster\/source\/([a-f0-9]{48})\/([a-f0-9]{24})$/.exec(path);
+        /^\/cluster\/source\/([a-f0-9]{48})\/([a-f0-9]{24}(?:\.(?:m3u8|ts|m4s|mp4|aac|key))?)$/.exec(
+          path,
+        );
       if (warm && sourceMatch && req.method === "GET") {
         const upstream = await warm.source(sourceMatch[1], sourceMatch[2]);
         if (!upstream.response.ok) {
