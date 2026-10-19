@@ -56,6 +56,32 @@ test("combines overlapping activity into one event with multiple object labels",
   assert.equal(store.get(event.id).videoUrl, `api/events/${event.id}/video`);
   assert.equal(store.totals().bytes, 100);
 });
+test("playable paging is not buried by recent failed capture attempts", async (t) => {
+  const store = await fixture(t);
+  const first = store.create("camera.entry", "motion", 1000, 3000);
+  store.finish(first.id, { duration: 2, bytes: 10 });
+  for (let index = 0; index < 130; index++) {
+    const failed = store.create(
+      "camera.entry",
+      "motion",
+      4000 + index,
+      5000 + index,
+    );
+    store.finish(failed.id, { status: "failed" });
+  }
+  assert.equal(
+    store
+      .list({ cameraId: "camera.entry", limit: 100 })
+      .events.some((event) => event.status === "ready"),
+    false,
+  );
+  assert.deepEqual(
+    store
+      .list({ cameraId: "camera.entry", status: "ready" })
+      .events.map((event) => event.id),
+    [first.id],
+  );
+});
 test("retention only removes expired completed events, preserving in-progress recordings", async (t) => {
   const store = await fixture(t);
   const old = store.create("camera.entry", "motion", 0, 1000);

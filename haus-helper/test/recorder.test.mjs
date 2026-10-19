@@ -7,6 +7,7 @@ import {
   rm,
   stat,
   readFile,
+  utimes,
 } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createRtspServer } from "node:net";
@@ -72,7 +73,7 @@ test(
         "-i",
         "color=c=gray:s=160x90:r=10",
         "-t",
-        "3",
+        "12",
         "-c:v",
         "libx264",
         "-pix_fmt",
@@ -81,18 +82,21 @@ test(
       ],
       { timeout: 10000 },
     );
-    await writeFile(join(dir, "index.csv"), `${name},0,3\n`);
+    await writeFile(join(dir, "index.csv"), `${name},0,12\n`);
+    await utimes(join(dir, name), new Date(at + 12000), new Date(at + 12000));
     recorder.buffers.set("camera.test", { dir, stopped: true });
     const event = recorder.trigger(
       "camera.test",
       "motion",
       undefined,
-      at + 1000,
+      at + 8000,
     );
     await recorder.finish(event);
     const result = store.get(event.id);
     assert.equal(result.status, "ready");
-    assert.ok(result.duration >= 2.9);
+    assert.equal(result.mediaStartAt, at);
+    assert.equal(result.detections[0].at - result.mediaStartAt, 8000);
+    assert.ok(result.duration >= 11.9);
     assert.ok(result.bytes > 1000);
     assert.ok((await stat(store.path(event.id, "jpg"))).size > 0);
   },
@@ -103,6 +107,21 @@ test("a missing camera buffer records an honest failure rather than an empty pla
   await recorder.finish(event);
   assert.equal(store.get(event.id).status, "failed");
   assert.equal(store.get(event.id).videoUrl, undefined);
+});
+
+test("a drifting source clock cannot hide pre-event footage from motion recordings", async (t) => {
+  const { dir, recorder } = await fixture(t);
+  const at = Date.now(),
+    prefix = `b${at - 3600000}-a1b2c3d4`;
+  const name = `${prefix}-000000400.mp4`;
+  await writeFile(join(dir, name), "completed-segment");
+  await utimes(join(dir, name), new Date(at), new Date(at));
+  // The RTP clock is an hour behind; the packet duration is still correct.
+  await writeFile(join(dir, `${prefix}.csv`), `${name},800,802\n`);
+  const [part] = await recorder.segments({ dir });
+  assert.ok(Math.abs(part.end - at) < 2);
+  assert.equal(part.end - part.start, 2000);
+  assert.ok(part.start >= at - 8000);
 });
 
 test("held motion extends the tail without inventing detections and rotates at the clip limit", async (t) => {

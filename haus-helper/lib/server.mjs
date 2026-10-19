@@ -284,6 +284,12 @@ export function createApi({
           return value;
         };
         const kind = url.searchParams.get("kind") || undefined;
+        const status = url.searchParams.get("status") || undefined;
+        if (
+          status &&
+          !["ready", "failed", "interrupted", "recording"].includes(status)
+        )
+          throw new Error("invalid_status");
         if (
           kind &&
           ![
@@ -311,6 +317,7 @@ export function createApi({
           limit: Math.min(200, Math.max(1, number("limit", 60))),
           cursor: url.searchParams.get("cursor") || undefined,
           kind,
+          status,
         };
         return json(res, 200, {
           ...store.list(filters),

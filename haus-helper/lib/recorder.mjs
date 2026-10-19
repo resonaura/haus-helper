@@ -198,6 +198,8 @@ export class Recorder {
       buffer.process = child;
       buffer.status = "starting";
       buffer.lastAdvance = Date.now();
+      buffer.segmentStartedAt = Date.now();
+      buffer.lastSegmentAt = undefined;
       buffer.lastFrame = -1;
       buffer.lastError = undefined;
       let progress = "";
@@ -286,7 +288,23 @@ export class Recorder {
         const csv = await readFile(join(buffer.dir, name), "utf8").catch(
           () => "",
         );
-        return parseSegments(csv, buffer.dir);
+        // A camera's RTP clock can jump or drift independently of wall time.
+        // Completed file mtimes track local receipt times, including
+        // reconnects; never project hours of source timestamp drift onto events.
+        return (
+          await Promise.all(
+            parseSegments(csv, buffer.dir).map(async (part) => {
+              const info = await stat(part.path).catch(() => null);
+              if (!info?.size) return undefined;
+              const duration = part.end - part.start;
+              return {
+                ...part,
+                start: info.mtimeMs - duration,
+                end: info.mtimeMs,
+              };
+            }),
+          )
+        ).filter(Boolean);
       }),
     );
     // Old versions could list the same overwritten wall-clock file more than once.
@@ -336,10 +354,22 @@ export class Recorder {
         }
       }
       for (const buffer of this.buffers.values()) {
+        const csv = buffer.listName
+          ? await readFile(join(buffer.dir, buffer.listName), "utf8").catch(
+              () => "",
+            )
+          : "";
+        const completed = parseSegments(csv, buffer.dir).at(-1);
+        if (completed) {
+          const info = await stat(completed.path).catch(() => null);
+          if (info?.size) buffer.lastSegmentAt = info.mtimeMs;
+        }
         if (
           buffer.process &&
           !buffer.killTimer &&
-          now - (buffer.lastAdvance ?? now) > 30000
+          (now - (buffer.lastAdvance ?? now) > 30000 ||
+            now - (buffer.lastSegmentAt ?? buffer.segmentStartedAt ?? now) >
+              30000)
         ) {
           buffer.status = "reconnecting";
           buffer.lastError = "Camera media stopped advancing; reconnecting";
@@ -487,6 +517,9 @@ export class Recorder {
           duration: info.duration,
           bytes: file.size,
           playbackVersion: PLAYBACK_VERSION,
+          // The event starts at detection; the file starts in the pre-event ring.
+          // Persist the actual boundary, including a keyframe-aligned extra segment.
+          mediaStartAt: ready[0].start,
           error:
             ready.at(-1).end < event.endAt - 8000
               ? "Partial recording: the camera stream stopped"
@@ -519,6 +552,7 @@ export class Recorder {
       error: buffer.lastError,
       audioExpected: buffer.expectedAudio,
       inputKind: buffer.inputKind,
+      lastSegmentAt: buffer.lastSegmentAt,
     }));
   }
   async preparePlayback(event, priority = 20) {

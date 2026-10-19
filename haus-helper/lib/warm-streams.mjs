@@ -109,12 +109,23 @@ export class WarmStreams {
             node.enabled &&
             node.roles.includes("stream") &&
             this.cluster.health.get(node.id)?.online &&
-            this.cluster.health.get(node.id)?.remote?.relayOrigin,
+            this.cluster.health.get(node.id)?.remote?.relayOrigin &&
+            !this.cluster.health.get(node.id)?.remote?.resources?.pressured &&
+            (this.cluster.health.get(node.id)?.remote?.streams?.max ?? 0) >
+              (this.cluster.health.get(node.id)?.remote?.streams?.active ?? 0),
         )
         .sort(
           (a, b) =>
-            (this.cluster.health.get(a.id)?.remote.streams.active ?? 0) -
-            (this.cluster.health.get(b.id)?.remote.streams.active ?? 0),
+            (this.cluster.health.get(a.id)?.remote.streams.active ?? 0) /
+              Math.max(
+                1,
+                this.cluster.health.get(a.id)?.remote.streams.max ?? 1,
+              ) -
+            (this.cluster.health.get(b.id)?.remote.streams.active ?? 0) /
+              Math.max(
+                1,
+                this.cluster.health.get(b.id)?.remote.streams.max ?? 1,
+              ),
         ) ?? [];
     for (const node of candidates.slice(0, 2)) {
       const origin = this.cluster.health.get(node.id).remote.relayOrigin;
