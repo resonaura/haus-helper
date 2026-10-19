@@ -259,6 +259,84 @@ test("batched segments have unique sequence identities and duplicate paths are n
 });
 
 test(
+  "direct recording preserves AAC and repeated direct failures select the HA fallback",
+  { timeout: 30000 },
+  async (t) => {
+    const { root, dir, recorder } = await fixture(t);
+    const source = join(root, "direct.mp4");
+    await runMedia("ffmpeg", [
+      "-v",
+      "error",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=s=160x90:r=10",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=440:sample_rate=16000",
+      "-t",
+      "4",
+      "-c:v",
+      "libx264",
+      "-g",
+      "20",
+      "-pix_fmt",
+      "yuv420p",
+      "-c:a",
+      "aac",
+      source,
+    ]);
+    const choices = [];
+    recorder.ha = {
+      recordingInput: async (camera, allowDirect) => {
+        assert.equal(camera.id, "camera.test");
+        choices.push(allowDirect);
+        return {
+          url: source,
+          kind: allowDirect ? "rtsp" : "ha",
+          inputArguments: [],
+        };
+      },
+      stream: () => {
+        throw new Error("HLS should not be requested for a direct source");
+      },
+    };
+    const buffer = { id: "camera.test", dir, stopped: false };
+    recorder.buffers.set(buffer.id, buffer);
+    await recorder.startBuffer(buffer);
+    buffer.stopped = true;
+    if (buffer.process) await once(buffer.process, "close");
+    assert.equal(buffer.expectedAudio, true);
+    assert.equal(buffer.inputKind, "rtsp");
+    const parts = await recorder.segments(buffer);
+    assert.ok(parts.length > 0);
+    const info = await runMedia("ffprobe", [
+      "-v",
+      "error",
+      "-select_streams",
+      "a:0",
+      "-count_packets",
+      "-show_entries",
+      "stream=nb_read_packets",
+      "-of",
+      "json",
+      parts[0].path,
+    ]);
+    assert.ok(Number(JSON.parse(info.stdout).streams[0]?.nb_read_packets) > 0);
+    buffer.stopped = false;
+    buffer.directFailures = 3;
+    buffer.directAttempt = Date.now();
+    await recorder.startBuffer(buffer);
+    buffer.stopped = true;
+    if (buffer.process) await once(buffer.process, "close");
+    assert.deepEqual(choices, [true, false]);
+    assert.equal(buffer.inputKind, "ha");
+  },
+);
+
+test(
   "prepares one hardware-compatible legacy copy and preserves the original",
   { timeout: 30000 },
   async (t) => {

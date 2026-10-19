@@ -1,3 +1,8 @@
+# 0.2.8
+
+- Prefer explicitly associated local RTSP telemetry for recording. This bypasses an observed HA HLS session that advertised AAC but delivered no audio packets, while the same camera's direct stream contained sound.
+- Use TCP for direct capture, keep HA credentials out of camera requests and public camera metadata, and fall back to authenticated HA HLS after repeated source failures. Source selection is exact/device-based and rejects ambiguous or non-local telemetry.
+
 # 0.2.7
 
 - Probe authenticated HLS audio before selecting recording tracks, allow longer audio discovery, and require the advertised track so an audio-capable source cannot silently start a video-only buffer. Probes cancel when recording stops; sources without audio still retain their video.

@@ -107,15 +107,31 @@ export class Recorder {
       if (available.bavail * available.bsize < 256 * 1024 ** 2)
         throw new Error("insufficient_storage");
       await mkdir(buffer.dir, { recursive: true, mode: 0o700 });
-      const url = await this.ha.stream(buffer.id);
+      const camera = this.cameras?.find((item) => item.id === buffer.id) ?? {
+        id: buffer.id,
+      };
+      const allowDirect =
+        (buffer.directFailures ?? 0) < 3 ||
+        Date.now() - (buffer.directAttempt ?? 0) > 300000;
+      const input = this.ha.recordingInput
+        ? await this.ha.recordingInput(camera, allowDirect)
+        : {
+            url: await this.ha.stream(buffer.id),
+            kind: "ha",
+            token: this.config.token,
+            inputArguments: ["-live_start_index", "-1", "-re"],
+          };
+      if (input.kind === "rtsp") buffer.directAttempt = Date.now();
+      buffer.inputKind = input.kind;
       if (this.stopped || buffer.stopped) return;
       if (this.config.record_audio) {
         const abort = new AbortController();
         buffer.probeAbort = abort;
         buffer.expectedAudio = await sourceHasAudio(
-          url,
-          this.config.token,
+          input.url,
+          input.token,
           AbortSignal.any([abort.signal, this.playbackAbort.signal]),
+          input.inputArguments,
         ).catch(() => undefined);
         if (buffer.probeAbort === abort) buffer.probeAbort = undefined;
       }
@@ -140,14 +156,12 @@ export class Recorder {
           "8000000",
           "-probesize",
           "8000000",
-          "-live_start_index",
-          "-1",
-          // Pace HTTP batches against their media clock.
-          "-re",
-          "-headers",
-          `Authorization: Bearer ${this.config.token}\r\n`,
+          ...input.inputArguments,
+          ...(input.token
+            ? ["-headers", `Authorization: Bearer ${input.token}\r\n`]
+            : []),
           "-i",
-          url,
+          input.url,
           "-map",
           "0:v:0",
           ...(this.config.record_audio
@@ -199,6 +213,8 @@ export class Recorder {
             if (buffer.lastFrame > 0) {
               buffer.status = "buffering";
               buffer.failures = 0;
+              if (buffer.lastFrame >= 120 && input.kind === "rtsp")
+                buffer.directFailures = 0;
             }
           }
         }
@@ -208,6 +224,8 @@ export class Recorder {
         if (buffer.process !== child) return;
         clearTimeout(buffer.killTimer);
         buffer.process = undefined;
+        if (input.kind === "rtsp")
+          buffer.directFailures = (buffer.directFailures ?? 0) + 1;
         buffer.status = "reconnecting";
         if (!buffer.stopped && !this.stopped)
           buffer.retry = setTimeout(
@@ -500,6 +518,7 @@ export class Recorder {
       status: buffer.status,
       error: buffer.lastError,
       audioExpected: buffer.expectedAudio,
+      inputKind: buffer.inputKind,
     }));
   }
   async preparePlayback(event, priority = 20) {

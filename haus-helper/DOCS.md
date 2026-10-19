@@ -2,7 +2,7 @@
 
 Local companion services for [Haus](https://github.com/resonaura/haus). This repository is `haus-helper`; the Home Assistant app is named **Haus**.
 
-Haus discovers cameras and their motion, person, pet, vehicle and doorbell detectors. A short local ring buffer preserves the beginning of an event; relevant video is finalized into a seekable MP4, indexed in SQLite, and shown in a timeline in Haus or the app's Home Assistant interface. Recordings remain on your home server. There is no cloud video service.
+Haus discovers cameras and their motion, person, pet, vehicle and doorbell detectors. A short local ring buffer preserves the beginning of an event; relevant video is finalized into a seekable MP4, indexed in SQLite, and shown in a timeline in Haus or the app's Home Assistant interface. When a camera explicitly exposes local RTSP stream telemetry, recording uses that source over TCP and falls back to HA HLS after repeated failures. This avoids an additional HLS remux and preserves source audio when an HA HLS session has lost its audio packets. Stream addresses and credentials stay inside the helper. Cameras without unambiguous local telemetry continue through HA. Recordings remain on your home server. There is no cloud video service.
 
 ## Install
 
