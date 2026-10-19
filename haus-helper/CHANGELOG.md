@@ -1,3 +1,7 @@
+# 0.2.3
+
+- Create full HA archives as background jobs and wait for the exact named backup through read-only status queries. Accept asynchronous and empty accepted responses without starting duplicate archives.
+
 # 0.2.2
 
 - Back off failed automatic backups for 5–60 minutes and retain that cooldown across restarts. Explicit retries remain available; successful backups clear the failure state.

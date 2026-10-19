@@ -23,6 +23,7 @@ import {
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { join } from "node:path";
+import { supervisorBackup } from "./supervisor-backup.mjs";
 import { runMedia } from "./media.mjs";
 export async function fileDigest(path) {
   const hash = createHash("sha256");
@@ -216,23 +217,17 @@ export class Backups {
       } else {
         if (this.config.standalone)
           throw new Error("supervisor_backups_unavailable");
-        const response = await this.supervisor("/backups/new/partial", {
-          method: "POST",
-          body: JSON.stringify({
+        haSlug = await supervisorBackup(
+          this.supervisor.bind(this),
+          {
             name: `Haus ${new Date(createdAt).toISOString()} ${randomUUID()}`,
-            background: false,
             compressed: true,
             homeassistant: true,
             addons: "ALL",
             folders: ["ssl", "share", "addons/local"],
-          }),
-        });
-        const result = await response.json();
-        if (result.result !== "ok" || !result.data?.slug)
-          throw new Error("supervisor_backup_failed");
-        haSlug = result.data.slug;
-        if (!/^[a-zA-Z0-9_-]+$/.test(haSlug))
-          throw new Error("invalid_backup_slug");
+          },
+          { signal: this.abort.signal },
+        );
         const download = await this.supervisor(`/backups/${haSlug}/download`);
         source = Readable.fromWeb(download.body);
       }
@@ -305,6 +300,7 @@ export class Backups {
       signal: AbortSignal.any([
         AbortSignal.timeout(1800000),
         this.abort.signal,
+        ...(init.signal ? [init.signal] : []),
       ]),
       redirect: "error",
     });
