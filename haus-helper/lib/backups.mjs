@@ -128,7 +128,7 @@ export class Backups {
     this.error = undefined;
     this.lastConfigVersion = 0;
     store.db.exec(
-      "CREATE TABLE IF NOT EXISTS haus_backups(digest TEXT PRIMARY KEY,kind TEXT NOT NULL,created_at INTEGER NOT NULL,bytes INTEGER NOT NULL,ha_slug TEXT)",
+      "CREATE TABLE IF NOT EXISTS haus_backups(digest TEXT PRIMARY KEY,kind TEXT NOT NULL,created_at INTEGER NOT NULL,bytes INTEGER NOT NULL,ha_slug TEXT); CREATE TABLE IF NOT EXISTS haus_backup_retries(kind TEXT PRIMARY KEY,next_at INTEGER NOT NULL,failures INTEGER NOT NULL)",
     );
   }
   async initialize() {
@@ -256,11 +256,28 @@ export class Backups {
           "INSERT INTO haus_backups(digest,kind,created_at,bytes,ha_slug)VALUES(?,?,?,?,?)",
         )
         .run(result.digest, kind, createdAt, result.size, haSlug ?? null);
+      this.store.db
+        .prepare("DELETE FROM haus_backup_retries WHERE kind=?")
+        .run(kind);
       this.error = undefined;
       if (kind === "haus" && this.dirtyAt === dirtyAt) this.dirtyAt = undefined;
       await this.prune();
       return this.list().find((item) => item.digest === result.digest);
     } catch (error) {
+      if (!this.abort.signal.aborted) {
+        const previous = this.store.db
+          .prepare("SELECT failures FROM haus_backup_retries WHERE kind=?")
+          .get(kind);
+        const failures = Math.min(20, (previous?.failures ?? 0) + 1);
+        const nextAt =
+          Date.now() +
+          Math.min(3600000, 300000 * 2 ** Math.min(failures - 1, 4));
+        this.store.db
+          .prepare(
+            "INSERT INTO haus_backup_retries(kind,next_at,failures)VALUES(?,?,?) ON CONFLICT(kind)DO UPDATE SET next_at=excluded.next_at,failures=excluded.failures",
+          )
+          .run(kind, nextAt, failures);
+      }
       this.error =
         kind === "ha"
           ? "Home Assistant backup could not complete"
@@ -320,14 +337,21 @@ export class Backups {
     const now = Date.now();
     const last = (kind) =>
       list.find((item) => item.kind === kind)?.createdAt ?? 0;
+    const ready = (kind) =>
+      now >=
+      (this.store.db
+        .prepare("SELECT next_at FROM haus_backup_retries WHERE kind=?")
+        .get(kind)?.next_at ?? 0);
     if (
-      now - last("haus") > 3600000 ||
-      (this.dirtyAt && now - this.dirtyAt >= 10000)
+      ready("haus") &&
+      (now - last("haus") > 3600000 ||
+        (this.dirtyAt && now - this.dirtyAt >= 10000))
     )
       await this.snapshot("haus");
     else if (
       !this.config.standalone &&
       this.config.ha_backups_enabled &&
+      ready("ha") &&
       now - last("ha") > 86400000
     )
       await this.snapshot("ha");

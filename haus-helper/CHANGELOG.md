@@ -1,3 +1,7 @@
+# 0.2.2
+
+- Back off failed automatic backups for 5–60 minutes and retain that cooldown across restarts. Explicit retries remain available; successful backups clear the failure state.
+
 # 0.2.1
 
 - Discover Eufy using read-only info endpoints permitted to the existing backup role; avoid requiring manager access.
