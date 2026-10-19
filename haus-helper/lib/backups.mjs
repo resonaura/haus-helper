@@ -278,10 +278,17 @@ export class Backups {
           )
           .run(kind, nextAt, failures);
       }
-      this.error =
-        kind === "ha"
-          ? "Home Assistant backup could not complete"
-          : "Configuration backup could not complete";
+      const storage =
+        ["backup_storage_full", "backup_too_large"].includes(error.message) ||
+        error.code === "ENOSPC";
+      this.error = storage
+        ? "Not enough free storage to keep this backup. Free space before retrying."
+        : kind === "ha"
+          ? "Home Assistant backup could not complete. Automatic retries will wait before trying again."
+          : "Configuration backup could not complete. Automatic retries will wait before trying again.";
+      console.warn(
+        `Haus ${kind} backup failed (${storage ? "storage" : error.status ? `Supervisor HTTP ${error.status}` : "backup operation"})`,
+      );
       throw error;
     } finally {
       this.busy = false;
@@ -303,7 +310,9 @@ export class Backups {
     });
     if (!response.ok) {
       await response.body?.cancel();
-      throw new Error("supervisor_backup_failed");
+      const error = new Error("supervisor_backup_failed");
+      error.status = response.status;
+      throw error;
     }
     return response;
   }
