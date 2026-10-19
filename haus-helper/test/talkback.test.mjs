@@ -108,3 +108,45 @@ test("transcodes the browser stream only to the discovered talk endpoint and rel
   assert.equal(killed, true);
   assert.deepEqual(Buffer.concat(chunks), Buffer.from([26, 69, 223, 163]));
 });
+
+// An external DNS name is not private merely because its labels resemble an IP prefix.
+test("rejects external DNS names disguised as private IPv4 addresses", () => {
+  const camera = { id: "camera.garden" };
+  for (const host of [
+    "127.example.com",
+    "10.example.com",
+    "192.168.example.com",
+    "172.16.example.com",
+  ]) {
+    assert.equal(
+      talkbackTarget(camera, {
+        states: [
+          {
+            entity_id: "sensor.garden_talkback_rtmp_stream",
+            state: `rtmp://${host}/talk/garden`,
+          },
+        ],
+      }),
+      null,
+    );
+  }
+  for (const host of [
+    "10.1.2.3",
+    "172.16.1.3",
+    "192.168.1.20",
+    "camera.local",
+    "camera.lan",
+  ]) {
+    assert.equal(
+      talkbackTarget(camera, {
+        states: [
+          {
+            entity_id: "sensor.garden_talkback_rtmp_stream",
+            state: `rtmp://${host}/talk/garden`,
+          },
+        ],
+      }),
+      `rtmp://${host}/talk/garden`,
+    );
+  }
+});

@@ -1,4 +1,8 @@
-# 0.1.8
+# 0.1.9
+
+- Validate numeric private addresses before accepting a Talkback RTMP target, rejecting external DNS names that resemble private IPv4 prefixes.
+
+## 0.1.8
 
 - Add authenticated microphone streaming for cameras with a dedicated local Talkback RTMP sensor.
 - Transcode browser Opus to mono AAC using the existing FFmpeg runtime; stop on disconnect, timeout or client cancellation.
