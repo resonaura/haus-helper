@@ -1,3 +1,7 @@
+# 0.3.1
+
+- Recover in-progress events from persisted pre-event ring segments after a restart or upgrade. Finalize recovery in the background while fresh capture and the API start normally.
+
 # 0.3.0
 
 - Add per-camera software motion recording, disabled by default. Smart mode uses local NanoDet object recognition; sustained-motion mode handles small animals and other movement with temporal/noise/exposure filtering.
