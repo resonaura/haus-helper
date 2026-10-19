@@ -1,6 +1,20 @@
 import { randomBytes } from "node:crypto";
 import { access } from "node:fs/promises";
 import { nodeJson, nodeRequest } from "./node-client.mjs";
+import { once } from "node:events";
+
+async function eachWorker(items, visit) {
+  let next = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(8, items.length) }, async () => {
+      for (;;) {
+        const index = next++;
+        if (index >= items.length) return;
+        await visit(items[index]);
+      }
+    }),
+  );
+}
 
 /** Sticky assignments, bounded work, expiring capabilities and failure cooldowns. */
 export class Motion {
@@ -18,6 +32,7 @@ export class Motion {
     this.cooldowns = new Map();
     this.cameras = [];
     this.localSupported = false;
+    this.abort = new AbortController();
   }
   async initialize() {
     try {
@@ -128,6 +143,7 @@ export class Motion {
       });
   }
   async start(camera) {
+    if (this.stopped) return;
     const epoch = this.epoch;
     const mode = camera.motionDetection.mode;
     const candidates = this.candidates().slice(0, 3);
@@ -136,7 +152,16 @@ export class Motion {
       (!this.localSupported || [...this.jobs.values()].some((job) => job.local))
     )
       return;
-    const source = await this.ha.stream(camera.id);
+    const sourceDeadline = AbortSignal.any([
+      this.abort.signal,
+      AbortSignal.timeout(6000),
+    ]);
+    const source = await Promise.race([
+      this.ha.stream(camera.id),
+      once(sourceDeadline, "abort").then(() => {
+        throw new Error("detector_source_timeout");
+      }),
+    ]);
     if (this.stopped || this.epoch !== epoch) return;
     for (const node of candidates) {
       const entry = { id: camera.id, source, expires: this.now() + 45000 };
@@ -152,6 +177,7 @@ export class Motion {
           method: "POST",
           data: { source: url, mode },
           timeout: 5000,
+          signal: this.abort.signal,
         });
         if (!/^[a-f0-9-]{36}$/.test(remote.id))
           throw new Error("invalid_detector_job");
@@ -207,11 +233,12 @@ export class Motion {
           camera.available &&
           this.config.recording_enabled,
       );
-      for (const [id, job] of this.jobs) {
+      await eachWorker([...this.jobs], async ([id, job]) => {
+        if (this.stopped || this.jobs.get(id) !== job) return;
         const camera = enabled.find((camera) => camera.id === id);
         if (!camera || camera.motionDetection.mode !== job.mode) {
           await this.release(id);
-          continue;
+          return;
         }
         try {
           if (job.local) {
@@ -230,6 +257,7 @@ export class Motion {
             job.entry.expires = this.now() + 45000;
             const status = await nodeJson(job.node, `/v1/detectors/${job.id}`, {
               timeout: 4000,
+              signal: this.abort.signal,
             });
             if (!["starting", "running"].includes(status.state))
               throw new Error("detector_failed");
@@ -248,8 +276,14 @@ export class Motion {
           this.cooldowns.set(job.node?.id ?? id, this.now() + 30000);
           await this.release(id);
         }
-      }
-      for (const camera of enabled)
+      });
+      for (const camera of enabled
+        .filter(
+          (camera) =>
+            !this.jobs.has(camera.id) &&
+            (this.cooldowns.get(camera.id) ?? 0) <= this.now(),
+        )
+        .slice(0, 3))
         if (
           !this.jobs.has(camera.id) &&
           (this.cooldowns.get(camera.id) ?? 0) <= this.now()
@@ -266,7 +300,7 @@ export class Motion {
   }
   async stop() {
     this.stopped = true;
-    while (this.busy) await new Promise((resolve) => setTimeout(resolve, 20));
+    this.abort.abort();
     this.capacity?.stop();
     await Promise.allSettled(
       [...this.jobs.keys()].map((id) => this.release(id)),
