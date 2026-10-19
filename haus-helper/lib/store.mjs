@@ -10,6 +10,7 @@ export class Store {
     CREATE TABLE IF NOT EXISTS settings (id TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, camera_id TEXT NOT NULL, start_at INTEGER NOT NULL, end_at INTEGER NOT NULL, status TEXT NOT NULL, kinds TEXT NOT NULL, detections TEXT NOT NULL, duration REAL DEFAULT 0, bytes INTEGER DEFAULT 0, error TEXT);
     CREATE INDEX IF NOT EXISTS events_camera_time ON events(camera_id,start_at DESC,id DESC);
+    CREATE INDEX IF NOT EXISTS events_camera_status_time ON events(camera_id,status,start_at DESC,id DESC);
     CREATE TABLE IF NOT EXISTS camera_availability (camera_id TEXT NOT NULL, start_at INTEGER NOT NULL, end_at INTEGER NOT NULL, state TEXT NOT NULL, PRIMARY KEY(camera_id,start_at));
     CREATE INDEX IF NOT EXISTS camera_availability_time ON camera_availability(camera_id,end_at);
     PRAGMA user_version=2;`);
@@ -27,7 +28,9 @@ export class Store {
       );
     if (!columns.includes("playback_info"))
       this.db.exec("ALTER TABLE events ADD COLUMN playback_info TEXT");
-    this.db.exec("PRAGMA user_version=4");
+    if (!columns.includes("media_start_at"))
+      this.db.exec("ALTER TABLE events ADD COLUMN media_start_at INTEGER");
+    this.db.exec("PRAGMA user_version=5");
   }
   overrides() {
     return Object.fromEntries(
@@ -134,13 +137,14 @@ export class Store {
       bytes = 0,
       error = null,
       playbackVersion = 0,
+      mediaStartAt = null,
     } = {},
   ) {
     this.db
       .prepare(
-        "UPDATE events SET status=?,duration=?,bytes=?,error=?,playback_version=? WHERE id=?",
+        "UPDATE events SET status=?,duration=?,bytes=?,error=?,playback_version=?,media_start_at=coalesce(?,media_start_at) WHERE id=?",
       )
-      .run(status, duration, bytes, error, playbackVersion, id);
+      .run(status, duration, bytes, error, playbackVersion, mediaStartAt, id);
     return this.get(id);
   }
   get(id) {
@@ -159,6 +163,9 @@ export class Store {
       id: row.id,
       cameraId: row.camera_id,
       startAt: row.start_at,
+      ...(row.media_start_at !== null
+        ? { mediaStartAt: row.media_start_at }
+        : {}),
       endAt: row.end_at,
       status: row.status,
       kinds: JSON.parse(row.kinds),
@@ -184,6 +191,7 @@ export class Store {
     cursor,
     limit = 60,
     kind,
+    status,
     direction = "older",
   } = {}) {
     const args = [from, to];
@@ -191,6 +199,10 @@ export class Store {
     if (cameraId) {
       where += " AND camera_id=?";
       args.push(cameraId);
+    }
+    if (status) {
+      where += " AND status=?";
+      args.push(status);
     }
     const order = direction === "newer" ? "ASC" : "DESC";
     if (cursor) {

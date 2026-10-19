@@ -1,3 +1,10 @@
+# 0.2.10
+
+- Keep motion pre-roll aligned to local receipt times even when a camera's RTP timestamps drift. Preserve the first frame's actual time, including eight seconds of pre-event footage by default.
+- Watch completed segments as well as frame counters, restarting an ingest that is alive but no longer produces footage.
+- Query playable moments separately from failed capture attempts so failures cannot bury older recordings in the viewer.
+- Balance optional relays by each node's available capacity and avoid overloaded workers.
+
 # 0.2.9
 
 - Use RTSP's protocol-specific TCP I/O timeout for direct capture and discovery. Real Debian FFmpeg rejected the HTTP timeout option even though the macOS fixture accepted it; HA fallback preserved video during the check.
