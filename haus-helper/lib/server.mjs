@@ -213,6 +213,7 @@ export function createApi({
             eufyTalkback: true,
             cluster: true,
             sharedPreferences: true,
+            previewPreheat: true,
           },
           connected: ha.connected,
           recordingEnabled: config.recording_enabled,
@@ -335,7 +336,12 @@ export function createApi({
           return json(
             res,
             200,
-            await warm.touch(camera, input.owner, input.active),
+            await warm.touch(
+              camera,
+              input.owner,
+              input.active,
+              input.preview === true,
+            ),
           );
         }
         if (req.method === "POST" && cameraMatch[2] === "talk")

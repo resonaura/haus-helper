@@ -125,3 +125,52 @@ test("simultaneous opens cannot claim the same idle warming slot", async () => {
   );
   assert.equal(warm.entries.size, 0);
 });
+
+test("dashboard preheat never wakes batteries and reuses a healthy recording buffer", async () => {
+  let calls = 0;
+  const warm = new WarmStreams(
+    {
+      stream: async () => {
+        calls++;
+        return "http://ha/api/hls/test/master.m3u8";
+      },
+    },
+    { buffers: new Map([["camera.recording", { status: "buffering" }]]) },
+  );
+  assert.equal(
+    (
+      await warm.touch(
+        { id: "camera.battery", batteryPowered: true },
+        "preview",
+        true,
+        true,
+      )
+    ).reason,
+    "battery",
+  );
+  assert.equal(
+    (await warm.touch({ id: "camera.recording" }, "preview", true, true))
+      .source,
+    "recording",
+  );
+  assert.equal(calls, 0);
+  await warm.stop();
+});
+test("failed manifest keepalives reacquire the source and overlapping ticks do not duplicate requests", async () => {
+  let calls = 0;
+  const warm = new WarmStreams(
+    {
+      stream: async () => `http://ha/api/hls/test/${++calls}.m3u8`,
+      media: async () => new Response(null, { status: 503 }),
+    },
+    { buffers: new Map() },
+  );
+  await warm.touch({ id: "camera.test" }, "one", true);
+  await Promise.all([warm.tick(), warm.tick()]);
+  assert.equal(calls, 1);
+  await warm.tick();
+  await warm.tick();
+  assert.equal(calls, 2);
+  assert.match(warm.entries.get("camera.test").source, /2.m3u8/);
+  await warm.stop();
+});

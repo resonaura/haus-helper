@@ -65,7 +65,7 @@ export class Recorder {
     for (const [id, buffer] of this.buffers) {
       if (!enabled.has(id)) {
         buffer.stopped = true;
-        buffer.process?.kill("SIGTERM");
+        this.terminateBuffer(buffer);
         clearTimeout(buffer.retry);
         this.buffers.delete(id);
       }
@@ -86,6 +86,19 @@ export class Recorder {
         void this.startBuffer(buffer);
       }
   }
+  terminateBuffer(buffer) {
+    const child = buffer.process;
+    if (!child || buffer.killTimer) return;
+    child.kill("SIGTERM");
+    buffer.killTimer = setTimeout(() => {
+      if (buffer.process === child) child.kill("SIGKILL");
+    }, 3000);
+    buffer.killTimer.unref();
+    child.once("close", () => {
+      clearTimeout(buffer.killTimer);
+      buffer.killTimer = undefined;
+    });
+  }
   async startBuffer(buffer) {
     if (this.stopped || buffer.stopped) return;
     try {
@@ -105,6 +118,10 @@ export class Recorder {
           "error",
           "-nostdin",
           "-y",
+          "-progress",
+          "pipe:1",
+          "-stats_period",
+          "1",
           "-rw_timeout",
           "15000000",
           "-live_start_index",
@@ -137,20 +154,48 @@ export class Recorder {
           join(buffer.dir, `${prefix}-%09d.mp4`),
         ],
         {
-          stdio: ["ignore", "ignore", "pipe"],
+          stdio: ["ignore", "pipe", "pipe"],
           env: { ...process.env, TZ: "UTC" },
         },
       );
       buffer.process = child;
-      buffer.status = "buffering";
+      buffer.status = "starting";
+      buffer.lastAdvance = Date.now();
+      buffer.lastFrame = -1;
       buffer.lastError = undefined;
+      let progress = "";
+      child.stdout.on("data", (chunk) => {
+        progress = (progress + chunk.toString()).slice(-8192);
+        const lines = progress.split("\n");
+        progress = lines.pop() ?? "";
+        for (const line of lines) {
+          const match = /^frame=(\d+)/.exec(line);
+          if (match && Number(match[1]) > buffer.lastFrame) {
+            buffer.lastFrame = Number(match[1]);
+            buffer.lastAdvance = Date.now();
+            if (buffer.lastFrame > 0) {
+              buffer.status = "buffering";
+              buffer.failures = 0;
+            }
+          }
+        }
+      });
       child.stderr.on("data", () => {});
       const exited = () => {
         if (buffer.process !== child) return;
+        clearTimeout(buffer.killTimer);
         buffer.process = undefined;
         buffer.status = "reconnecting";
         if (!buffer.stopped && !this.stopped)
-          buffer.retry = setTimeout(() => void this.startBuffer(buffer), 15000);
+          buffer.retry = setTimeout(
+            () => void this.startBuffer(buffer),
+            Math.min(
+              30000,
+              2000 *
+                2 **
+                  Math.min((buffer.failures = (buffer.failures ?? 0) + 1), 4),
+            ),
+          );
       };
       child.once("error", exited);
       child.once("close", exited);
@@ -250,6 +295,15 @@ export class Recorder {
         }
       }
       for (const buffer of this.buffers.values()) {
+        if (
+          buffer.process &&
+          !buffer.killTimer &&
+          now - (buffer.lastAdvance ?? now) > 30000
+        ) {
+          buffer.status = "reconnecting";
+          buffer.lastError = "Camera media stopped advancing; reconnecting";
+          this.terminateBuffer(buffer);
+        }
         const pinned = this.store
           .recording()
           .filter((event) => event.cameraId === buffer.id)
@@ -284,7 +338,7 @@ export class Recorder {
             Math.max(1, this.buffers.size)
         ) {
           buffer.status = "storage-limit";
-          buffer.process?.kill("SIGTERM");
+          this.terminateBuffer(buffer);
           for (const event of this.store
             .recording()
             .filter((item) => item.cameraId === buffer.id))
@@ -397,6 +451,10 @@ export class Recorder {
               ? "Partial recording: the camera stream stopped"
               : null,
         });
+        this.store.setPlayback(event.id, 0, PLAYBACK_VERSION, {
+          audio: info.audio,
+          sourceAudioMissing: this.config.record_audio && !info.audio,
+        });
       } finally {
         await unlink(manifest).catch(() => {});
         await unlink(temporary).catch(() => {});
@@ -491,10 +549,16 @@ export class Recorder {
     for (const buffer of this.buffers.values()) {
       buffer.stopped = true;
       clearTimeout(buffer.retry);
-      buffer.process?.kill("SIGTERM");
+      this.terminateBuffer(buffer);
     }
     const deadline = Date.now() + 5000;
-    while (this.finalizing.size && Date.now() < deadline)
+    while (
+      (this.finalizing.size ||
+        [...this.buffers.values()].some(
+          (buffer) => buffer.process && buffer.process.exitCode === null,
+        )) &&
+      Date.now() < deadline
+    )
       await new Promise((resolve) => setTimeout(resolve, 100));
   }
 }

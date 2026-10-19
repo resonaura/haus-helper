@@ -39,7 +39,7 @@ export async function probe(path) {
       "-v",
       "error",
       "-show_entries",
-      "format=duration:stream=codec_name",
+      "format=duration:stream=codec_name,codec_type,sample_rate,channels",
       "-of",
       "json",
       path,
@@ -49,7 +49,10 @@ export async function probe(path) {
   const info = JSON.parse(result.stdout);
   return {
     duration: Number(info.format?.duration) || 0,
-    codec: info.streams?.[0]?.codec_name,
+    codec: info.streams?.find((stream) => stream.codec_type === "video")
+      ?.codec_name,
+    audio:
+      info.streams?.some((stream) => stream.codec_type === "audio") ?? false,
   };
 }
 export function parseRange(value, size) {
