@@ -427,6 +427,7 @@ export class Cluster {
         const response = await nodeRequest(node, `/v1/blobs/${media.digest}`, {
           signal,
           timeout: 600000,
+          headerTimeout: 3000,
           headers: range ? { Range: range } : {},
         });
         if (response.ok) return response;

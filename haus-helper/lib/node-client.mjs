@@ -40,6 +40,7 @@ export async function nodeRequest(
     signal,
     headers = {},
     timeout = 60000,
+    headerTimeout,
   } = {},
 ) {
   const origin = nodeAddress(node.url, node.allowHttp);
@@ -67,22 +68,31 @@ export async function nodeRequest(
   }
   if (file) body = Readable.toWeb(createReadStream(file));
   signal?.throwIfAborted();
-  return fetch(target, {
-    method,
-    body,
-    duplex: body ? "half" : undefined,
-    headers: {
-      ...sign(node.key, method, path, digest),
-      ...headers,
-      ...(data !== undefined ? { "Content-Type": "application/json" } : {}),
-      ...(file ? { "Content-Length": String(length) } : {}),
-    },
-    signal: AbortSignal.any([
-      AbortSignal.timeout(timeout),
-      ...(signal ? [signal] : []),
-    ]),
-    redirect: "error",
-  });
+  const headersDeadline = new AbortController();
+  const timer = headerTimeout
+    ? setTimeout(() => headersDeadline.abort(), headerTimeout)
+    : undefined;
+  try {
+    return await fetch(target, {
+      method,
+      body,
+      duplex: body ? "half" : undefined,
+      headers: {
+        ...sign(node.key, method, path, digest),
+        ...headers,
+        ...(data !== undefined ? { "Content-Type": "application/json" } : {}),
+        ...(file ? { "Content-Length": String(length) } : {}),
+      },
+      signal: AbortSignal.any([
+        AbortSignal.timeout(timeout),
+        headersDeadline.signal,
+        ...(signal ? [signal] : []),
+      ]),
+      redirect: "error",
+    });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 export async function nodeJson(node, path, options) {
   const response = await nodeRequest(node, path, options);
