@@ -519,7 +519,7 @@ export class Recorder {
           playbackVersion: PLAYBACK_VERSION,
           // The event starts at detection; the file starts in the pre-event ring.
           // Persist the actual boundary, including a keyframe-aligned extra segment.
-          mediaStartAt: ready[0].start,
+          mediaStartAt: Math.round(ready[0].start),
           error:
             ready.at(-1).end < event.endAt - 8000
               ? "Partial recording: the camera stream stopped"

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { recordingMetadata } from "./recording-metadata.mjs";
 import { stat } from "node:fs/promises";
 import { nodeAddress, nodeRequest, nodeJson } from "./node-client.mjs";
 import { fileDigest } from "./backups.mjs";
@@ -219,7 +220,10 @@ export class Cluster {
             .get(digest);
           await nodeJson(node, "/v1/recordings", {
             method: "POST",
-            data: { digest, event: this.store.get(row.event_id) },
+            data: {
+              digest,
+              event: recordingMetadata(this.store.get(row.event_id)),
+            },
             signal: this.abort.signal,
           });
         }

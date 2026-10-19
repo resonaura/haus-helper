@@ -66,6 +66,10 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
         sensors: [],
         suggested: [],
         enabled: overrides[state.entity_id]?.enabled !== false,
+        motionDetection: overrides[state.entity_id]?.motionDetection ?? {
+          enabled: false,
+          mode: "objects",
+        },
         sensorMode: Array.isArray(overrides[state.entity_id]?.sensorIds)
           ? "manual"
           : "automatic",

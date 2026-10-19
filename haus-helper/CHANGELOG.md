@@ -1,3 +1,9 @@
+# 0.3.0
+
+- Add per-camera software motion recording, disabled by default. Smart mode uses local NanoDet object recognition; sustained-motion mode handles small animals and other movement with temporal/noise/exposure filtering.
+- Prefer compatible NVR workers, distribute by quota, expire lost capabilities and reassign failed or persistently overloaded jobs. Keep at most one resource-aware local fallback and never accumulate an inference backlog.
+- Preserve the existing continuous pre-event ring and post-activity tail independently of analysis. Normalize first-frame timestamps and bound replicated metadata even for long detection bursts.
+
 # 0.2.10
 
 - Keep motion pre-roll aligned to local receipt times even when a camera's RTP timestamps drift. Preserve the first frame's actual time, including eight seconds of pre-event footage by default.

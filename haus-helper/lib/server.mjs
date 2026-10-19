@@ -1,4 +1,5 @@
 import { rewritePlaylist } from "./warm-streams.mjs";
+import { motionSettings } from "./motion-settings.mjs";
 import { createTalkback } from "./talkback.mjs";
 import { createServer } from "node:http";
 import metadata from "../package.json" with { type: "json" };
@@ -56,6 +57,7 @@ export function createApi({
   backups,
   shared,
   warm,
+  motion,
 }) {
   const talkback = createTalkback({ config });
   const server = createServer(async (req, res) => {
@@ -214,6 +216,7 @@ export function createApi({
             cluster: true,
             sharedPreferences: true,
             previewPreheat: true,
+            softwareMotion: !!motion,
           },
           connected: ha.connected,
           recordingEnabled: config.recording_enabled,
@@ -229,6 +232,7 @@ export function createApi({
           cameras: await Promise.all(
             getRegistry().cameras.map(async (camera) => ({
               ...camera,
+              ...(motion ? { motionStatus: motion.status(camera.id) } : {}),
               talkAvailable: await talkback.available(camera, getRegistry()),
             })),
           ),
@@ -370,6 +374,8 @@ export function createApi({
           const body = await requestBody(req);
           const old = store.overrides()[id] ?? {};
           const next = { ...old };
+          if (body.motionDetection !== undefined)
+            next.motionDetection = motionSettings(body.motionDetection);
           if (body.enabled !== undefined) {
             if (typeof body.enabled !== "boolean")
               throw new Error("invalid_enabled");

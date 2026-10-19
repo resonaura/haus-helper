@@ -29,6 +29,10 @@ test("binds detectors to their own camera device, never a neighboring device", (
   );
   assert.equal(cameras[1].sensors.length, 1);
   assert.ok(cameras[0].sensors.every((sensor) => sensor.source === "device"));
+  assert.deepEqual(cameras[0].motionDetection, {
+    enabled: false,
+    mode: "objects",
+  });
 });
 test("matches a unique camera name but leaves ambiguous names as suggestions", () => {
   const states = [
