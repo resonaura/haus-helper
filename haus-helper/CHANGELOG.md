@@ -1,3 +1,8 @@
+# 0.3.2
+
+- Preserve media extensions on scoped HLS resources so current Linux FFmpeg can decode camera streams on NVR workers without disabling segment validation.
+- Use memory working set for worker scheduling; inactive recording file cache no longer prevents useful analysis on small nodes.
+
 # 0.3.1
 
 - Recover in-progress events from persisted pre-event ring segments after a restart or upgrade. Finalize recovery in the background while fresh capture and the API start normally.

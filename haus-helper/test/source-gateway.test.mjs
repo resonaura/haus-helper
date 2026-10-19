@@ -29,6 +29,7 @@ test("the source gateway exposes opaque camera resources without HA tokens or ge
   warm.entries.set(entry.id, entry);
   warm.leases.set(token, entry);
   const resource = warm.resource(entry, entry.source);
+  assert.match(resource, /^[a-f0-9]{24}\.m3u8$/);
   const server = createApi({
     config: { standalone: true, apiToken: "owner-only" },
     ha,
@@ -52,6 +53,11 @@ test("the source gateway exposes opaque camera resources without HA tokens or ge
   assert.ok(!text.includes("http://ha"));
   const segment = text.split("\n").find((line) => line.startsWith("/cluster/"));
   assert.ok(segment);
+  assert.match(segment, /\/[a-f0-9]{24}\.ts$/);
+  assert.match(
+    text,
+    /URI="\/cluster\/source\/[a-f0-9]{48}\/[a-f0-9]{24}\.mp4"/,
+  );
   assert.equal(
     await (await fetch(base + segment)).text(),
     "synthetic-fragment",
@@ -63,6 +69,10 @@ test("the source gateway exposes opaque camera resources without HA tokens or ge
   );
   assert.equal((await fetch(base + "/api/status")).status, 401);
   const count = visited.length;
+  assert.equal(
+    (await fetch(base + segment.replace(/\.ts$/, ".mp4"))).status,
+    400,
+  );
   assert.equal(
     (await fetch(`${base}/cluster/source/${token}/${"f".repeat(24)}`)).status,
     400,
