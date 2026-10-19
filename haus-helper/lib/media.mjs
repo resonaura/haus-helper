@@ -77,3 +77,33 @@ export function parseRange(value, size) {
     throw new Error("invalid_range");
   return { start, end, partial: true };
 }
+
+/** Discover late HLS audio before choosing an output stream map. No microphone is opened. */
+export async function sourceHasAudio(url, token, signal) {
+  const { stdout } = await runMedia(
+    "ffprobe",
+    [
+      "-v",
+      "error",
+      "-rw_timeout",
+      "15000000",
+      "-headers",
+      `Authorization: Bearer ${token}\r\n`,
+      "-analyzeduration",
+      "8000000",
+      "-probesize",
+      "8000000",
+      "-show_entries",
+      "stream=codec_type",
+      "-of",
+      "json",
+      url,
+    ],
+    { timeout: 20000, signal },
+  );
+  return (
+    JSON.parse(stdout).streams?.some(
+      (stream) => stream.codec_type === "audio",
+    ) ?? false
+  );
+}

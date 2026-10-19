@@ -148,6 +148,12 @@ test(
       "lavfi",
       "-i",
       "testsrc2=s=160x90:r=10",
+      "-f",
+      "lavfi",
+      "-i",
+      "sine=frequency=600:sample_rate=16000",
+      "-c:a",
+      "aac",
       "-t",
       "5",
       "-c:v",
@@ -202,6 +208,19 @@ test(
       await pause(50);
     if (buffer.process) await once(buffer.process, "close");
     const segments = await recorder.segments(buffer);
+    assert.equal(buffer.expectedAudio, true);
+    const soundtrack = await runMedia("ffprobe", [
+      "-v",
+      "error",
+      "-select_streams",
+      "a:0",
+      "-show_entries",
+      "stream=codec_name",
+      "-of",
+      "json",
+      segments[0].path,
+    ]);
+    assert.equal(JSON.parse(soundtrack.stdout).streams[0].codec_name, "aac");
     assert.equal(
       new Set(segments.map((part) => part.path)).size,
       segments.length,
