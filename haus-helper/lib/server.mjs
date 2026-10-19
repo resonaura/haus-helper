@@ -1,3 +1,4 @@
+import { createTalkback, talkbackTarget } from "./talkback.mjs";
 import { createServer } from "node:http";
 import metadata from "../package.json" with { type: "json" };
 import { readFile, stat } from "node:fs/promises";
@@ -51,6 +52,7 @@ export function createApi({
   getRegistry,
   refresh,
 }) {
+  const talkback = createTalkback();
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url, "http://haus.invalid");
@@ -103,7 +105,12 @@ export function createApi({
           buffers: recorder.status(),
         });
       if (req.method === "GET" && path === "/api/cameras")
-        return json(res, 200, { cameras: getRegistry().cameras });
+        return json(res, 200, {
+          cameras: getRegistry().cameras.map((camera) => ({
+            ...camera,
+            talkAvailable: Boolean(talkbackTarget(camera, getRegistry())),
+          })),
+        });
       if (req.method === "GET" && path === "/api/detectors")
         return json(res, 200, {
           detectors: getRegistry()
@@ -156,7 +163,7 @@ export function createApi({
         });
       }
       const cameraMatch =
-        /^\/api\/cameras\/(camera\.[a-z0-9_]+)(?:\/(record|snapshot))?$/.exec(
+        /^\/api\/cameras\/(camera\.[a-z0-9_]+)(?:\/(record|snapshot|talk))?$/.exec(
           path,
         );
       if (cameraMatch) {
@@ -167,6 +174,8 @@ export function createApi({
         );
         const id = camera?.id;
         if (!camera) return json(res, 404, { error: "camera_not_found" });
+        if (req.method === "POST" && cameraMatch[2] === "talk")
+          return await talkback.stream(camera, getRegistry(), req, res);
         if (req.method === "GET" && cameraMatch[2] === "snapshot") {
           const image = await ha.snapshot(id);
           return res
@@ -275,7 +284,8 @@ export function createApi({
       });
     }
   });
-  server.requestTimeout = 30000;
+  server.requestTimeout = 65000;
   server.headersTimeout = 10000;
+  server.on("close", talkback.stopAll);
   return server;
 }
