@@ -1,3 +1,8 @@
+# 0.2.4
+
+- Page camera recordings in both directions across days without repeating clips, including equal timestamps.
+- Provide indexed calendar-day markers using device-local date boundaries, including daylight-saving transitions.
+
 # 0.2.3
 
 - Create full HA archives as background jobs and wait for the exact named backup through read-only status queries. Accept asynchronous and empty accepted responses without starting duplicate archives.

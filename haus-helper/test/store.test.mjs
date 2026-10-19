@@ -162,3 +162,64 @@ test("availability records actual transitions, clips day boundaries and leaves u
     periods,
   );
 });
+
+test("pages both ways through equal timestamps without skipping or replaying clips", async (t) => {
+  const store = await fixture(t);
+  for (let i = 0; i < 7; i++)
+    store.create("camera.entry", "motion", 1000 + Math.floor(i / 2), 4000);
+  const all = store.list({ cameraId: "camera.entry", limit: 20 }).events;
+  const first = store.list({ cameraId: "camera.entry", to: 1001, limit: 2 });
+  const newer = store.list({
+    cameraId: "camera.entry",
+    cursor: first.newestCursor,
+    direction: "newer",
+    limit: 2,
+  });
+  const last = store.list({
+    cameraId: "camera.entry",
+    cursor: newer.nextCursor,
+    direction: "newer",
+    limit: 2,
+  });
+  const loaded = [...first.events, ...newer.events, ...last.events];
+  assert.equal(new Set(loaded.map((event) => event.id)).size, loaded.length);
+  assert.deepEqual(
+    loaded.map((event) => event.id).sort(),
+    all
+      .slice(0, 5)
+      .map((event) => event.id)
+      .sort(),
+  );
+  assert.equal(last.nextCursor, null);
+});
+
+test("calendar marks only ready footage and respects caller-local daylight-saving boundaries", async (t) => {
+  const store = await fixture(t);
+  const boundaries = [
+    Date.UTC(2026, 2, 7, 8),
+    Date.UTC(2026, 2, 8, 8),
+    Date.UTC(2026, 2, 9, 7),
+    Date.UTC(2026, 2, 10, 7),
+  ];
+  for (const at of [
+    boundaries[0] - 1,
+    boundaries[1],
+    boundaries[2] - 1,
+    boundaries[3],
+  ]) {
+    const event = store.create("camera.entry", "motion", at, at + 1000);
+    store.finish(event.id, { bytes: 1, duration: 1 });
+  }
+  store.create("camera.entry", "motion", boundaries[2], boundaries[2] + 1000);
+  const other = store.create(
+    "camera.other",
+    "motion",
+    boundaries[0],
+    boundaries[0] + 1000,
+  );
+  store.finish(other.id, { bytes: 1 });
+  assert.deepEqual(
+    store.recordedDays({ cameraId: "camera.entry", boundaries }),
+    [boundaries[1]],
+  );
+});
