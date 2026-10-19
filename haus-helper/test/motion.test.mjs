@@ -34,6 +34,43 @@ test("software detection is explicitly opted in and rejects unknown configuratio
   assert.equal(metadata.playbackInfo.audio, true);
   assert.ok(JSON.stringify(metadata).length < 1000);
 });
+test("shutdown cancels a stuck source acquisition without creating a worker or lease", async () => {
+  const motion = new Motion({
+    ha: { stream: () => new Promise(() => {}) },
+    recorder: {},
+    warm: { leases: new Map() },
+    config: { recording_enabled: true },
+    cluster: {
+      nodes: () => [{ id: "node", enabled: true, roles: ["stream"] }],
+      health: new Map([
+        [
+          "node",
+          {
+            online: true,
+            remote: {
+              relayOrigin: "http://helper.test",
+              detectors: { supported: true, active: 0, max: 1 },
+            },
+          },
+        ],
+      ]),
+    },
+  });
+  motion.sync([
+    {
+      id: "camera.test",
+      enabled: true,
+      available: true,
+      motionDetection: { enabled: true, mode: "objects" },
+    },
+  ]);
+  const pending = motion.tick();
+  await new Promise((resolve) => setImmediate(resolve));
+  await motion.stop();
+  await pending;
+  assert.equal(motion.jobs.size, 0);
+  assert.equal(motion.warm.leases.size, 0);
+});
 test("distributes by node capacity, deduplicates motion and reassigns failed workers without leaking leases", async (t) => {
   let at = 1000000,
     streams = 0,
