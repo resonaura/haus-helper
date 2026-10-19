@@ -1,16 +1,17 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { eufyEndpoint } from "../lib/eufy-endpoint.mjs";
-test("discovers only one running Eufy app at its verified private address, caches and coalesces reads", async () => {
+test("discovers Eufy through info endpoints allowed to the backup role; caches and coalesces reads", async () => {
   let calls = 0;
   const endpoint = eufyEndpoint(
     { token: "fixture-token" },
     {
       fetchRequest: async (url, options) => {
         calls++;
+        assert.match(new URL(url).pathname, /^\/.*\/info$/);
         assert.equal(options.headers.Authorization, "Bearer fixture-token");
         return Response.json({
-          data: url.endsWith("/info")
+          data: !url.endsWith("/supervisor/info")
             ? {
                 ip_address: "172.30.32.1",
                 options: { port: 3000, password: "never-returned" },
@@ -35,7 +36,7 @@ test("never discovers a public or disguised host, and explicit external installa
       {
         fetchRequest: async (url) =>
           Response.json({
-            data: url.endsWith("/info")
+            data: !url.endsWith("/supervisor/info")
               ? { ip_address: host }
               : { addons: [{ slug: "a_eufy_security_ws", state: "started" }] },
           }),

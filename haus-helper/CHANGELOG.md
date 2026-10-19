@@ -1,3 +1,7 @@
+# 0.2.1
+
+- Discover Eufy using read-only info endpoints permitted to the existing backup role; avoid requiring manager access.
+
 # 0.2.0
 
 - Bounded camera-stream warming and optional NVR live relays with opaque, expiring camera capabilities.
