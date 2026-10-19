@@ -1,4 +1,13 @@
-# 0.1.9
+# 0.2.0
+
+- Bounded camera-stream warming and optional NVR live relays with opaque, expiring camera capabilities.
+- Optional NVR storage/media workers, verified replication, direct seekable playback grants and recovery catalogs.
+- Helper-backed shared layout with revision checks, home-scoped offline caches, and private native recovery-kit export.
+- Encrypted configuration/HA backup rings and consistent SQLite hot-backup hooks; exclude recursive archives and media buffers.
+- Eufy Security WebSocket talkback with confirmed startup and owned-session cleanup; streaming ingress for microphone POST bodies.
+- Fixed-cadence versioned playback copies, explicit concat durations, source-gap diagnostics and a bounded priority encoder queue.
+
+## 0.1.9
 
 - Validate numeric private addresses before accepting a Talkback RTMP target, rejecting external DNS names that resemble private IPv4 prefixes.
 

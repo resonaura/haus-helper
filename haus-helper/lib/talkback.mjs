@@ -1,3 +1,4 @@
+import { createEufyTalkback } from "./eufy-talkback.mjs";
 import { spawn } from "node:child_process";
 import { isIP } from "node:net";
 import { pipeline } from "node:stream/promises";
@@ -32,14 +33,23 @@ export function talkbackTarget(camera, registry) {
   }
 }
 
-export function createTalkback({ spawnProcess = spawn } = {}) {
+export function createTalkback({ spawnProcess = spawn, config = {} } = {}) {
+  const eufy = createEufyTalkback(config);
   const active = new Map();
   const stopAll = () => {
+    eufy.stopAll();
     for (const stop of active.values()) stop();
   };
   const stream = async (camera, registry, req, res) => {
     const target = talkbackTarget(camera, registry);
-    if (!target) throw new Error("talkback_unavailable");
+    if (!target) {
+      if (
+        req.headers["x-haus-client"] !== "1" ||
+        !String(req.headers["content-type"]).startsWith("audio/webm")
+      )
+        throw new Error("invalid_audio");
+      return eufy.stream(camera, registry, req, res);
+    }
     if (active.has(camera.id)) throw new Error("talkback_busy");
     if (
       req.headers["x-haus-client"] !== "1" ||
@@ -123,5 +133,11 @@ export function createTalkback({ spawnProcess = spawn } = {}) {
       stop();
     }
   };
-  return { stream, stopAll };
+  return {
+    stream,
+    stopAll,
+    available: async (camera, registry) =>
+      Boolean(talkbackTarget(camera, registry)) ||
+      (await eufy.available(camera, registry)),
+  };
 }

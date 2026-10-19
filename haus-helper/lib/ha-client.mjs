@@ -128,6 +128,23 @@ export class HaClient extends EventEmitter {
       url.pathname = base.pathname.replace(/\/$/, "") + url.pathname;
     return url.href;
   }
+  async media(value) {
+    const base = new URL(this.config.base),
+      url = new URL(value);
+    const prefix = base.pathname.replace(/\/$/, "") + "/api/hls/";
+    if (
+      url.origin !== base.origin ||
+      !url.pathname.startsWith(prefix) ||
+      url.username ||
+      url.password
+    )
+      throw new Error("invalid_stream_address");
+    return fetch(url, {
+      headers: { Authorization: `Bearer ${this.config.token}` },
+      signal: AbortSignal.timeout(15000),
+      redirect: "error",
+    });
+  }
   async snapshot(cameraId) {
     const result = await fetch(
       `${this.config.base}/api/camera_proxy/${encodeURIComponent(cameraId)}`,

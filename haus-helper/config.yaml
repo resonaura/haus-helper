@@ -1,6 +1,6 @@
 name: Haus
 slug: haus-helper
-version: "0.1.9"
+version: "0.2.0"
 description: "Local camera event recording, a private timeline, and companion services for Haus."
 url: "https://github.com/resonaura/haus-helper"
 image: "ghcr.io/resonaura/haus-helper-{arch}"
@@ -11,16 +11,33 @@ startup: services
 boot: auto
 init: false
 ingress: true
+ingress_stream: true
 ingress_port: 8099
+ports:
+  8099/tcp: null
+ports_description:
+  8099/tcp: "Optional private live-relay source port; keep disabled unless using NVR live relays"
 panel_icon: mdi:home-outline
 panel_title: Haus
 homeassistant_api: true
+hassio_api: true
+hassio_role: backup
+panel_admin: false
+backup: hot
+backup_pre: "sh -c 'test ! -f /app/lib/backup-hook.mjs || node /app/lib/backup-hook.mjs pre'"
+backup_post: "sh -c 'test ! -f /app/lib/backup-hook.mjs || node /app/lib/backup-hook.mjs post'"
+backup_exclude:
+  - "haus.sqlite*"
+  - "backups/*"
+  - "buffer/*"
 map:
   - type: media
     read_only: false
 options:
   recording_enabled: true
   record_audio: true
+  ha_backups_enabled: true
+  eufy_ws_url: ""
   pre_roll_seconds: 8
   post_roll_seconds: 20
   max_event_seconds: 300
@@ -30,6 +47,8 @@ options:
 schema:
   recording_enabled: bool
   record_audio: bool
+  ha_backups_enabled: bool
+  eufy_ws_url: str?
   pre_roll_seconds: int(0,30)
   post_roll_seconds: int(5,120)
   max_event_seconds: int(30,300)
