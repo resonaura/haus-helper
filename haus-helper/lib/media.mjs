@@ -85,7 +85,7 @@ export async function sourceHasAudio(url, token, signal, inputArguments = []) {
     [
       "-v",
       "error",
-      "-rw_timeout",
+      /^rtsps?:/.test(url) ? "-timeout" : "-rw_timeout",
       "15000000",
       ...(token ? ["-headers", `Authorization: Bearer ${token}\r\n`] : []),
       "-analyzeduration",
