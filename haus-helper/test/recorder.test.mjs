@@ -9,6 +9,7 @@ import {
   readFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
+import { createServer as createRtspServer } from "node:net";
 import { once } from "node:events";
 import { setTimeout as pause } from "node:timers/promises";
 import { tmpdir } from "node:os";
@@ -333,6 +334,47 @@ test(
     if (buffer.process) await once(buffer.process, "close");
     assert.deepEqual(choices, [true, false]);
     assert.equal(buffer.inputKind, "ha");
+  },
+);
+
+test(
+  "both direct discovery and recorder reach an RTSP peer with Linux-compatible options",
+  { timeout: 15000 },
+  async (t) => {
+    const { dir, recorder } = await fixture(t);
+    const requests = [];
+    const server = createRtspServer((socket) => {
+      socket.once("data", (bytes) => {
+        requests.push(bytes.toString());
+        const cseq = /CSeq:\s*(\d+)/i.exec(bytes.toString())?.[1] ?? "1";
+        socket.end(
+          `RTSP/1.0 503 Service Unavailable\r\nCSeq: ${cseq}\r\nContent-Length: 0\r\n\r\n`,
+        );
+      });
+      socket.on("error", () => {});
+    });
+    await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+    t.after(() => new Promise((resolve) => server.close(resolve)));
+    recorder.ha = {
+      recordingInput: async () => ({
+        url: `rtsp://127.0.0.1:${server.address().port}/live`,
+        kind: "rtsp",
+        inputArguments: ["-rtsp_transport", "tcp"],
+      }),
+    };
+    const buffer = { id: "camera.test", dir, stopped: false };
+    recorder.buffers.set(buffer.id, buffer);
+    await recorder.startBuffer(buffer);
+    buffer.stopped = true;
+    if (buffer.process) await once(buffer.process, "close");
+    assert.ok(
+      requests.length >= 2,
+      "ffprobe and ffmpeg both negotiate RTSP instead of rejecting input options",
+    );
+    assert.ok(
+      requests.every((request) => !request.includes("Bearer")),
+      "HA token never enters the RTSP negotiation",
+    );
   },
 );
 

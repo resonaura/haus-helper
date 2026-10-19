@@ -150,7 +150,7 @@ export class Recorder {
           "pipe:1",
           "-stats_period",
           "1",
-          "-rw_timeout",
+          /^rtsps?:/.test(input.url) ? "-timeout" : "-rw_timeout",
           "15000000",
           "-analyzeduration",
           "8000000",

@@ -1,3 +1,7 @@
+# 0.2.9
+
+- Use RTSP's protocol-specific TCP I/O timeout for direct capture and discovery. Real Debian FFmpeg rejected the HTTP timeout option even though the macOS fixture accepted it; HA fallback preserved video during the check.
+
 # 0.2.8
 
 - Prefer explicitly associated local RTSP telemetry for recording. This bypasses an observed HA HLS session that advertised AAC but delivered no audio packets, while the same camera's direct stream contained sound.
