@@ -2,9 +2,62 @@ import { createEufyTalkback } from "./eufy-talkback.mjs";
 import { spawn } from "node:child_process";
 import { isIP } from "node:net";
 import { pipeline } from "node:stream/promises";
+import { lookup } from "node:dns/promises";
+
+const privateIp = (host) =>
+  (isIP(host) === 4 &&
+    /^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.)/.test(host)) ||
+  host === "::1" ||
+  (isIP(host) === 6 && /^(fc|fd)/i.test(host));
+export function talkbackAddress(value) {
+  try {
+    const url = new URL(value);
+    const host = url.hostname.replace(/^\[|\]$/g, "");
+    return url.protocol === "rtmp:" &&
+      !url.hash &&
+      String(value).length <= 2048 &&
+      (privateIp(host) ||
+        host === "localhost" ||
+        /\.(local|lan|home\.arpa)$/.test(host))
+      ? url.href
+      : null;
+  } catch {
+    return null;
+  }
+}
+export function customTalkback(value, registry) {
+  if (value === null) return null;
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Array.isArray(value) ||
+    Object.keys(value).length !== 1
+  )
+    throw new Error("invalid_talkback_source");
+  if (typeof value.url === "string" && talkbackAddress(value.url))
+    return { url: value.url };
+  if (
+    typeof value.entityId === "string" &&
+    /^(sensor|text|input_text)\.[a-z0-9_]+$/.test(value.entityId) &&
+    registry.states.some(
+      (state) =>
+        state.entity_id === value.entityId && talkbackAddress(state.state),
+    )
+  )
+    return { entityId: value.entityId };
+  throw new Error("invalid_talkback_source");
+}
 
 /** A dedicated HA talkback sensor is authoritative; streaming support alone is not. */
 export function talkbackTarget(camera, registry) {
+  if (camera.talkback) {
+    const value = camera.talkback.entityId
+      ? registry.states.find(
+          (state) => state.entity_id === camera.talkback.entityId,
+        )?.state
+      : camera.talkback.url;
+    return talkbackAddress(value);
+  }
   const stems = [camera.id, ...(camera.aliases ?? [])].map((id) =>
     id.split(".")[1].replace(/_internal$/, ""),
   );
@@ -42,6 +95,7 @@ export function createTalkback({ spawnProcess = spawn, config = {} } = {}) {
   };
   const stream = async (camera, registry, req, res) => {
     const target = talkbackTarget(camera, registry);
+    if (camera.talkback && !target) throw new Error("invalid_talkback_source");
     if (!target) {
       if (
         req.headers["x-haus-client"] !== "1" ||
@@ -51,11 +105,24 @@ export function createTalkback({ spawnProcess = spawn, config = {} } = {}) {
       return eufy.stream(camera, registry, req, res);
     }
     if (active.has(camera.id)) throw new Error("talkback_busy");
+    if (req.destroyed || res.destroyed) throw new Error("talkback_cancelled");
     if (
       req.headers["x-haus-client"] !== "1" ||
       !String(req.headers["content-type"]).startsWith("audio/webm")
     )
       throw new Error("invalid_audio");
+    const host = new URL(target).hostname.replace(/^\[|\]$/g, "");
+    const addresses = isIP(host)
+      ? [{ address: host }]
+      : await lookup(host, { all: true });
+    if (!addresses.length || addresses.some((item) => !privateIp(item.address)))
+      throw new Error("invalid_private_talkback_address");
+    if (active.has(camera.id)) throw new Error("talkback_busy");
+    if (req.destroyed || res.destroyed) throw new Error("talkback_cancelled");
+    const resolvedTarget = new URL(target);
+    resolvedTarget.hostname = addresses[0].address.includes(":")
+      ? `[${addresses[0].address}]`
+      : addresses[0].address;
     const child = spawnProcess(
       "ffmpeg",
       [
@@ -83,7 +150,7 @@ export function createTalkback({ spawnProcess = spawn, config = {} } = {}) {
         "1",
         "-f",
         "flv",
-        target,
+        resolvedTarget.href,
       ],
       { stdio: ["pipe", "ignore", "pipe"] },
     );
@@ -137,7 +204,9 @@ export function createTalkback({ spawnProcess = spawn, config = {} } = {}) {
     stream,
     stopAll,
     available: async (camera, registry) =>
-      Boolean(talkbackTarget(camera, registry)) ||
-      (await eufy.available(camera, registry)),
+      camera.talkback
+        ? Boolean(talkbackTarget(camera, registry))
+        : Boolean(talkbackTarget(camera, registry)) ||
+          (await eufy.available(camera, registry)),
   };
 }

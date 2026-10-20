@@ -1,3 +1,9 @@
+# 0.3.4
+
+- Custom cameras can attach a microphone output using an explicit local RTMP address or a selected source entity. Recording remains opt-in.
+- Validate targets at configuration and use, pin DNS to a verified local address, and never return microphone credentials in camera API responses.
+- Add source validation and credential-redaction regressions.
+
 # 0.3.3
 
 - New cameras start in Stream only. Preserve explicit settings and migrate previously observed cameras without losing existing recording choices.

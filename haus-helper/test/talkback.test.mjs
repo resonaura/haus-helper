@@ -150,3 +150,53 @@ test("rejects external DNS names disguised as private IPv4 addresses", () => {
     );
   }
 });
+
+test("custom talk sources accept exact local targets or explicitly selected URL entities and fail closed after an entity changes", async () => {
+  const { customTalkback, talkbackAddress } =
+    await import("../lib/talkback.mjs");
+  const registry = {
+    states: [
+      {
+        entity_id: "sensor.voice",
+        state: "rtmp://192.168.1.25/custom/microphone",
+      },
+    ],
+  };
+  const source = customTalkback({ entityId: "sensor.voice" }, registry);
+  assert.equal(
+    talkbackTarget({ id: "camera.test", talkback: source }, registry),
+    "rtmp://192.168.1.25/custom/microphone",
+  );
+  assert.equal(
+    talkbackTarget(
+      { id: "camera.test", talkback: source },
+      {
+        states: [
+          {
+            entity_id: "sensor.voice",
+            state: "rtmp://public.example/microphone",
+          },
+        ],
+      },
+    ),
+    null,
+  );
+  assert.throws(() =>
+    customTalkback({ url: "http://192.168.1.1/token" }, registry),
+  );
+  assert.throws(() =>
+    customTalkback({ url: "rtmp://192.168.1.1.evil/talk" }, registry),
+  );
+  assert.throws(() => customTalkback({ entityId: "sensor.unknown" }, registry));
+  assert.throws(() =>
+    customTalkback(
+      { url: "rtmp://192.168.1.1/talk", entityId: "sensor.voice" },
+      registry,
+    ),
+  );
+  assert.equal(
+    talkbackAddress("rtmp://[fd00::1]/talk"),
+    "rtmp://[fd00::1]/talk",
+  );
+  assert.equal(customTalkback(null, registry), null);
+});

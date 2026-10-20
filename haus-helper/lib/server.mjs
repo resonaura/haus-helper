@@ -1,6 +1,6 @@
 import { rewritePlaylist } from "./warm-streams.mjs";
 import { motionSettings } from "./motion-settings.mjs";
-import { createTalkback } from "./talkback.mjs";
+import { createTalkback, customTalkback } from "./talkback.mjs";
 import { createServer } from "node:http";
 import metadata from "../package.json" with { type: "json" };
 import { readFile, stat } from "node:fs/promises";
@@ -12,6 +12,11 @@ import { pipeline } from "node:stream/promises";
 import { detectionKind } from "./discovery.mjs";
 import { parseRange } from "./media.mjs";
 const web = join(dirname(fileURLToPath(import.meta.url)), "../web");
+const publicCamera = (camera) => {
+  if (!camera) return undefined;
+  const { talkback, ...visible } = camera;
+  return { ...visible, talkbackConfigured: Boolean(talkback) };
+};
 const safeEqual = (a, b) => {
   const left = Buffer.from(a || "");
   const right = Buffer.from(b || "");
@@ -219,6 +224,7 @@ export function createApi({
             sharedPreferences: true,
             previewPreheat: true,
             softwareMotion: !!motion,
+            customTalkback: true,
           },
           connected: ha.connected,
           recordingEnabled: config.recording_enabled,
@@ -233,7 +239,7 @@ export function createApi({
         return json(res, 200, {
           cameras: await Promise.all(
             getRegistry().cameras.map(async (camera) => ({
-              ...camera,
+              ...publicCamera(camera),
               ...(motion ? { motionStatus: motion.status(camera.id) } : {}),
               talkAvailable: await talkback.available(camera, getRegistry()),
             })),
@@ -376,6 +382,8 @@ export function createApi({
           const body = await requestBody(req);
           const old = store.overrides()[id] ?? {};
           const next = { ...old };
+          if (body.talkback !== undefined)
+            next.talkback = customTalkback(body.talkback, getRegistry());
           if (body.motionDetection !== undefined)
             next.motionDetection = motionSettings(body.motionDetection);
           if (body.enabled !== undefined) {
@@ -405,7 +413,9 @@ export function createApi({
           backups?.markChanged();
           await refresh();
           return json(res, 200, {
-            camera: getRegistry().cameras.find((item) => item.id === id),
+            camera: publicCamera(
+              getRegistry().cameras.find((item) => item.id === id),
+            ),
           });
         }
       }
