@@ -7,8 +7,8 @@ export function playbackArguments({
 } = {}) {
   const audioFilter =
     Number.isFinite(audioTrimSeconds) && audioTrimSeconds > 0
-      ? `atrim=start=${audioTrimSeconds},asetpts=PTS-STARTPTS,aresample=async=1000:first_pts=0`
-      : "aresample=async=1000:first_pts=0";
+      ? `atrim=start=${audioTrimSeconds},asetpts=PTS-STARTPTS,aresample=async=1000:first_pts=0,apad`
+      : "aresample=async=1000:first_pts=0,apad";
   return [
     ...(copyVideo
       ? ["-c:v", "copy"]

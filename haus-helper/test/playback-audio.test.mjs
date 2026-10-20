@@ -111,3 +111,34 @@ test("repairs a proven silent audio lead and caps playback at the actual video",
     "real audio before the proposed boundary must never be silently shifted",
   );
 });
+test("a short audio track cannot truncate the remaining camera video", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "haus-short-audio-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const output = join(root, "playback.mp4");
+  await runMedia("ffmpeg", [
+    "-v",
+    "error",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc2=size=160x90:rate=20:duration=4",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=500:sample_rate=16000:duration=1",
+    ...playbackArguments(),
+    output,
+  ]);
+  const probe = await runMedia("ffprobe", [
+    "-v",
+    "error",
+    "-show_entries",
+    "format=duration",
+    "-of",
+    "json",
+    output,
+  ]);
+  const duration = Number(JSON.parse(probe.stdout).format.duration);
+  assert.ok(duration >= 3.95 && duration < 4.2);
+});
