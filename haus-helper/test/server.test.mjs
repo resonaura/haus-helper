@@ -31,7 +31,12 @@ async function fixture(t, recorderOverrides = {}) {
       trigger: () => ({ id: "pending" }),
       ...recorderOverrides,
     },
-    getRegistry: () => ({ cameras: [camera], states: [] }),
+    getRegistry: () => ({
+      cameras: [
+        { ...camera, talkback: store.overrides()[camera.id]?.talkback },
+      ],
+      states: [],
+    }),
     refresh: async () => {},
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -150,4 +155,33 @@ test("original recording reads stay authenticated and bypass compatibility encod
   assert.equal(await response.text(), "original");
   assert.equal(prepared, 0);
   assert.equal(store.get(event.id).playbackVersion, 0);
+});
+
+test("custom microphone credentials never enter public camera responses", async (t) => {
+  const { base, headers, store } = await fixture(t);
+  const talkback = {
+    url: "rtmp://fixture:private-camera-password@192.168.1.20/custom/talk",
+  };
+  const response = await fetch(base + "/api/cameras/camera.test", {
+    method: "PATCH",
+    headers: {
+      ...headers,
+      "Content-Type": "application/json",
+      "X-Haus-Client": "1",
+    },
+    body: JSON.stringify({ talkback }),
+  });
+  assert.equal(response.status, 200);
+  assert.deepEqual(store.overrides()["camera.test"].talkback, talkback);
+  assert.equal(
+    JSON.stringify(await response.json()).includes("private-camera-password"),
+    false,
+  );
+  const cameras = await (
+    await fetch(base + "/api/cameras", { headers })
+  ).json();
+  assert.equal(
+    JSON.stringify(cameras).includes("private-camera-password"),
+    false,
+  );
 });
