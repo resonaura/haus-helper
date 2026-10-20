@@ -1,3 +1,9 @@
+# 0.3.3
+
+- New cameras start in Stream only. Preserve explicit settings and migrate previously observed cameras without losing existing recording choices.
+- Warm HA viewer manifests separately from direct RTSP recording under bounded, privacy-aware preview leases; avoid duplicate NVR relay workers.
+- Add migration/preheat regressions and give the slow-body deadline fixture realistic local scheduling tolerance.
+
 # 0.3.2
 
 - Preserve media extensions on scoped HLS resources so current Linux FFmpeg can decode camera streams on NVR workers without disabling segment validation.

@@ -37,7 +37,8 @@ export class WarmStreams {
       owner.length > 80
     )
       throw new Error("invalid_warm_session");
-    if (active && this.recorder.buffers?.get(camera.id)?.status === "buffering")
+    const buffer = this.recorder.buffers?.get(camera.id);
+    if (active && buffer?.status === "buffering" && buffer.inputKind === "ha")
       return { warm: true, source: "recording" };
     let entry = this.entries.get(camera.id);
     if (!active) {
@@ -101,6 +102,10 @@ export class WarmStreams {
     const source = await this.ha.stream(entry.id);
     if (this.stopped || this.entries.get(entry.id) !== entry) return;
     entry.source = source;
+    // Direct RTSP recording does not warm HA's independent viewer producer.
+    // Keep its manifest warm under the same bounded preview leases, without a
+    // second NVR decoder/relay for a camera already buffered by the recorder.
+    if (this.recorder.buffers?.get(entry.id)?.status === "buffering") return;
     const candidates =
       this.cluster
         ?.nodes()
@@ -198,7 +203,11 @@ export class WarmStreams {
           }
           continue;
         }
-        if (!entry.source || this.recorder.buffers?.has(entry.id)) continue;
+        if (
+          !entry.source ||
+          this.recorder.buffers?.get(entry.id)?.inputKind === "ha"
+        )
+          continue;
         // Fetch only manifests; no background decoder, audio track or microphone is kept alive.
         try {
           const response = await this.ha.media(entry.source);

@@ -135,7 +135,11 @@ test("dashboard preheat never wakes batteries and reuses a healthy recording buf
         return "http://ha/api/hls/test/master.m3u8";
       },
     },
-    { buffers: new Map([["camera.recording", { status: "buffering" }]]) },
+    {
+      buffers: new Map([
+        ["camera.recording", { status: "buffering", inputKind: "ha" }],
+      ]),
+    },
   );
   assert.equal(
     (
@@ -172,5 +176,38 @@ test("failed manifest keepalives reacquire the source and overlapping ticks do n
   await warm.tick();
   assert.equal(calls, 2);
   assert.match(warm.entries.get("camera.test").source, /2.m3u8/);
+  await warm.stop();
+});
+
+test("direct recording keeps the separate HA viewer warm without a duplicate NVR relay", async () => {
+  let sources = 0,
+    manifests = 0;
+  const warm = new WarmStreams(
+    {
+      stream: async () => {
+        sources++;
+        return "http://ha/api/hls/direct/master.m3u8";
+      },
+      media: async () => {
+        manifests++;
+        return new Response("#EXTM3U");
+      },
+    },
+    {
+      buffers: new Map([
+        ["camera.direct", { status: "buffering", inputKind: "rtsp" }],
+      ]),
+    },
+    {
+      nodes() {
+        throw new Error("A second NVR worker must not be allocated");
+      },
+    },
+  );
+  await warm.touch({ id: "camera.direct" }, "preview", true, true);
+  await warm.touch({ id: "camera.direct" }, "viewer", true);
+  await warm.tick();
+  assert.equal(sources, 1);
+  assert.equal(manifests, 1);
   await warm.stop();
 });

@@ -9,7 +9,7 @@ test("media header deadline releases an unresponsive node but allows a slow body
     if (req.url === "/stuck") return;
     res.writeHead(200, { "Content-Length": 4 });
     res.flushHeaders();
-    timers.push(setTimeout(() => res.end("clip"), 120));
+    timers.push(setTimeout(() => res.end("clip"), 600));
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   t.after(async () => {
@@ -24,13 +24,13 @@ test("media header deadline releases an unresponsive node but allows a slow body
   };
   await assert.rejects(
     nodeRequest(node, "/stuck", {
-      headerTimeout: 40,
+      headerTimeout: 300,
       timeout: 2000,
     }),
     { name: "AbortError" },
   );
   const response = await nodeRequest(node, "/body", {
-    headerTimeout: 40,
+    headerTimeout: 300,
     timeout: 2000,
   });
   assert.equal(await response.text(), "clip");

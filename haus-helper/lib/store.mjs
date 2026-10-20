@@ -31,6 +31,36 @@ export class Store {
     if (!columns.includes("media_start_at"))
       this.db.exec("ALTER TABLE events ADD COLUMN media_start_at INTEGER");
     this.db.exec("PRAGMA user_version=5");
+    this.db.exec("CREATE TABLE IF NOT EXISTS migrations (id TEXT PRIMARY KEY)");
+    if (
+      !this.db
+        .prepare("SELECT id FROM migrations WHERE id=?")
+        .get("explicit-recording-policy")
+    ) {
+      // Preserve recording choices for cameras known before the opt-in default.
+      // An empty/new installation has no historical cameras and enables none.
+      const known = this.db
+        .prepare(
+          "SELECT DISTINCT camera_id FROM camera_availability UNION SELECT DISTINCT camera_id FROM events",
+        )
+        .all();
+      const overrides = this.overrides();
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        for (const { camera_id: id } of known) {
+          const previous = overrides[id] ?? {};
+          if (previous.enabled === undefined)
+            this.setCamera(id, { ...previous, enabled: true });
+        }
+        this.db
+          .prepare("INSERT INTO migrations(id) VALUES(?)")
+          .run("explicit-recording-policy");
+        this.db.exec("COMMIT");
+      } catch (error) {
+        this.db.exec("ROLLBACK");
+        throw error;
+      }
+    }
   }
   overrides() {
     return Object.fromEntries(

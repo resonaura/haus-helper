@@ -33,6 +33,7 @@ test("binds detectors to their own camera device, never a neighboring device", (
     enabled: false,
     mode: "objects",
   });
+  assert.equal(cameras[0].enabled, false);
 });
 test("matches a unique camera name but leaves ambiguous names as suggestions", () => {
   const states = [
