@@ -249,3 +249,31 @@ test("calendar marks only ready footage and respects caller-local daylight-savin
     [boundaries[1]],
   );
 });
+
+test("recording policy migration preserves known cameras, explicit opt-outs and future stream-only defaults", async () => {
+  const root = await mkdtemp(join(tmpdir(), "haus-policy-"));
+  const database = join(root, "db.sqlite");
+  let store = new Store(database, root);
+  try {
+    store.observeAvailability("camera.old", "online", 1000);
+    store.observeAvailability("camera.opted_out", "online", 1000);
+    store.setCamera("camera.old", { sensorIds: [] });
+    store.setCamera("camera.opted_out", { enabled: false });
+    // Simulate the pre-migration schema while preserving its observations/settings.
+    store.db.exec("DELETE FROM migrations");
+    store.close();
+    store = new Store(database, root);
+    assert.deepEqual(store.overrides()["camera.old"], {
+      sensorIds: [],
+      enabled: true,
+    });
+    assert.equal(store.overrides()["camera.opted_out"].enabled, false);
+    store.observeAvailability("camera.new", "online", 2000);
+    store.close();
+    store = new Store(database, root);
+    assert.equal(store.overrides()["camera.new"], undefined);
+  } finally {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
