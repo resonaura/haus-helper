@@ -1,3 +1,10 @@
+# 0.3.5
+
+- Activity assist chooses the least-loaded eligible NVR node using CPU, working memory, stream load and reserved analysis capacity. Keep healthy assignments stable and pause or move overloaded workers.
+- Report the current or prospective processor even while Activity assist is off, including explicit Home Assistant fallback and capacity/compatibility reasons.
+- Detect disabled or disconnected processing nodes promptly and move bounded local work back to an available NVR node. Analysis remains opt-in.
+- Add placement, resource-pressure and fallback regressions.
+
 # 0.3.4
 
 - Custom cameras can attach a microphone output using an explicit local RTMP address or a selected source entity. Recording remains opt-in.

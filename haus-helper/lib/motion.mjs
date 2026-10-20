@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { access } from "node:fs/promises";
 import { nodeJson, nodeRequest } from "./node-client.mjs";
 import { once } from "node:events";
+import { analysisCandidates } from "./motion-placement.mjs";
 
 async function eachWorker(items, visit) {
   let next = 0;
@@ -38,6 +39,8 @@ export class Motion {
     try {
       await access(new URL("../vision/model.onnx", import.meta.url));
       this.worker ??= (await import("../vision/worker.mjs")).VisionWorker;
+      const { Capacity } = await import("../vision/capacity.mjs");
+      this.capacity = await new Capacity().initialize();
       this.localSupported = true;
     } catch {
       /* Older/development installations simply have no local inference worker. */
@@ -59,17 +62,62 @@ export class Motion {
   }
   status(id) {
     const job = this.jobs.get(id);
+    const camera = this.cameras.find((camera) => camera.id === id);
+    const candidate = job ? undefined : this.candidates()[0];
+    const home = !job?.node && !candidate;
+    const blocked =
+      home &&
+      (!this.localSupported ||
+        !this.capacity?.detectors ||
+        this.capacity.pressured ||
+        (!job && [...this.jobs.values()].some((entry) => entry.local)));
     return {
       state: job
         ? job.local
           ? job.worker.state
           : job.state
-        : this.cameras.find((camera) => camera.id === id)?.motionDetection
-              ?.enabled
+        : camera?.motionDetection?.enabled &&
+            camera.enabled &&
+            this.config.recording_enabled
           ? "waiting"
           : "off",
-      processor: job?.local ? "Home server" : job?.node?.name,
+      processor: home
+        ? this.config.standalone
+          ? "Haus server"
+          : "Home Assistant"
+        : (job?.node?.name ?? candidate?.name),
+      placement: home ? "home" : "nvr",
+      ...(home
+        ? {
+            fallbackReason: this.fallbackReason(),
+            ...(blocked
+              ? {
+                  blocked:
+                    !this.localSupported || !this.capacity?.detectors
+                      ? "unsupported"
+                      : "capacity",
+                }
+              : {}),
+          }
+        : {}),
     };
+  }
+  fallbackReason() {
+    const nodes = this.cluster.nodes();
+    if (!nodes.length) return "no_nodes";
+    const supported = nodes.filter(
+      (node) => node.enabled && node.roles.includes("stream"),
+    );
+    if (!supported.length) return "no_analysis_nodes";
+    const online = supported.filter(
+      (node) => this.cluster.health.get(node.id)?.online,
+    );
+    if (!online.length) return "nodes_unavailable";
+    return online.some(
+      (node) => this.cluster.health.get(node.id)?.remote?.detectors?.supported,
+    )
+      ? "nodes_busy"
+      : "no_analysis_nodes";
   }
   async release(id) {
     const job = this.jobs.get(id);
@@ -108,39 +156,13 @@ export class Motion {
     } catch {}
   }
   candidates() {
-    return this.cluster
-      .nodes()
-      .filter((node) => {
-        const health = this.cluster.health.get(node.id),
-          remote = health?.remote;
-        const assigned = [...this.jobs.values()].filter(
-          (job) => job.node?.id === node.id,
-        ).length;
-        return (
-          node.enabled &&
-          node.roles.includes("stream") &&
-          health?.online &&
-          remote?.detectors?.supported &&
-          remote.relayOrigin &&
-          !remote.resources?.pressured &&
-          (this.cooldowns.get(node.id) ?? 0) <= this.now() &&
-          Math.max(assigned, remote.detectors.active ?? 0) <
-            remote.detectors.max
-        );
-      })
-      .sort((a, b) => {
-        const load = (node) => {
-          const remote = this.cluster.health.get(node.id).remote;
-          return (
-            Math.max(
-              remote.detectors.active ?? 0,
-              [...this.jobs.values()].filter((job) => job.node?.id === node.id)
-                .length,
-            ) / Math.max(1, remote.detectors.max)
-          );
-        };
-        return load(a) - load(b);
-      });
+    return analysisCandidates(
+      this.cluster.nodes(),
+      this.cluster.health,
+      this.jobs,
+      this.cooldowns,
+      this.now(),
+    );
   }
   async start(camera) {
     if (this.stopped) return;
@@ -163,7 +185,7 @@ export class Motion {
       }),
     ]);
     if (this.stopped || this.epoch !== epoch) return;
-    for (const node of candidates) {
+    for (const node of this.candidates().slice(0, 3)) {
       const entry = { id: camera.id, source, expires: this.now() + 45000 };
       const lease = randomBytes(24).toString("hex");
       this.warm.leases.set(lease, entry);
@@ -200,15 +222,12 @@ export class Motion {
     }
     // Only one bounded local fallback. Production images include the same worker as the NVR.
     if (
+      this.candidates().length ||
       !this.localSupported ||
       [...this.jobs.values()].some((job) => job.local)
     )
       return;
-    if (!this.capacity) {
-      const { Capacity } = await import("../vision/capacity.mjs");
-      this.capacity = await new Capacity().initialize();
-    }
-    if (this.stopped || !this.capacity.detectors || this.capacity.pressured)
+    if (this.stopped || !this.capacity?.detectors || this.capacity.pressured)
       return;
     const job = { local: true, mode };
     const worker = new this.worker({
@@ -245,8 +264,28 @@ export class Motion {
             if (job.worker.state === "failed")
               throw new Error("local_detector_failed");
             // Move a local fallback to a recovered NVR without disturbing other cameras.
-            if (this.candidates().length) await this.release(id);
+            if (this.candidates().length) {
+              await this.release(id);
+              return;
+            }
+            job.overloadedAt = this.capacity?.pressured
+              ? (job.overloadedAt ?? this.now())
+              : undefined;
+            if (
+              (job.overloadedAt && this.now() - job.overloadedAt > 20000) ||
+              this.capacity?.memoryUsed / this.capacity?.memory > 0.9
+            )
+              throw new Error("local_detector_overloaded");
           } else {
+            const current = this.cluster
+              .nodes()
+              .find((node) => node.id === job.node.id);
+            if (
+              !current?.enabled ||
+              !current.roles.includes("stream") ||
+              !this.cluster.health.get(job.node.id)?.online
+            )
+              throw new Error("detector_node_unavailable");
             const pressured = this.cluster.health.get(job.node.id)?.remote
               ?.resources?.pressured;
             job.overloadedAt = pressured
