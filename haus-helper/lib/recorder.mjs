@@ -637,6 +637,8 @@ export class Recorder {
             ...diagnostics,
             ...alignment,
             duration: info.duration,
+            audio: info.audio,
+            sourceAudioMissing: this.config.record_audio && !info.audio,
           },
         );
         return output;
