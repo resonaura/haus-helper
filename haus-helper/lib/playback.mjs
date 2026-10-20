@@ -1,38 +1,50 @@
 import { runMedia } from "./media.mjs";
-export const PLAYBACK_VERSION = 2;
+export const PLAYBACK_VERSION = 3;
 /** Fixed cadence and bounded GOPs avoid multi-second decoder starvation and expensive seeks. */
-export function playbackArguments() {
+export function playbackArguments({
+  copyVideo = false,
+  audioTrimSeconds = 0,
+} = {}) {
+  const audioFilter =
+    Number.isFinite(audioTrimSeconds) && audioTrimSeconds > 0
+      ? `atrim=start=${audioTrimSeconds},asetpts=PTS-STARTPTS,aresample=async=1000:first_pts=0`
+      : "aresample=async=1000:first_pts=0";
   return [
-    "-c:v",
-    "libx264",
-    "-preset",
-    "veryfast",
-    "-crf",
-    "20",
-    "-threads",
-    "2",
-    "-pix_fmt",
-    "yuv420p",
-    "-vf",
-    "fps=20:start_time=0",
-    "-fps_mode",
-    "cfr",
-    "-g",
-    "40",
-    "-keyint_min",
-    "20",
-    "-sc_threshold",
-    "0",
-    "-bf",
-    "0",
-    "-video_track_timescale",
-    "90000",
+    ...(copyVideo
+      ? ["-c:v", "copy"]
+      : [
+          "-c:v",
+          "libx264",
+          "-preset",
+          "veryfast",
+          "-crf",
+          "20",
+          "-threads",
+          "2",
+          "-pix_fmt",
+          "yuv420p",
+          "-vf",
+          "fps=20:start_time=0",
+          "-fps_mode",
+          "cfr",
+          "-g",
+          "40",
+          "-keyint_min",
+          "20",
+          "-sc_threshold",
+          "0",
+          "-bf",
+          "0",
+          "-video_track_timescale",
+          "90000",
+        ]),
     "-c:a",
     "aac",
     "-b:a",
     "96k",
     "-af",
-    "aresample=async=1000:first_pts=0",
+    audioFilter,
+    "-shortest",
     "-movflags",
     "+faststart",
   ];

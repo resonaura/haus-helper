@@ -18,6 +18,7 @@ import {
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { runMedia, probe, sourceHasAudio } from "./media.mjs";
+import { inspectAudioAlignment } from "./playback-audio.mjs";
 export class Recorder {
   constructor(config, ha, store, onChange = () => {}) {
     this.config = config;
@@ -594,6 +595,10 @@ export class Recorder {
       const temporary = output.replace(".mp4", ".partial.mp4");
       try {
         const diagnostics = await inspectCadence(this.store.path(event.id));
+        const alignment = await inspectAudioAlignment(
+          this.store.path(event.id),
+          (event.endAt - (event.mediaStartAt ?? event.startAt)) / 1000,
+        );
         await this.encoding.run(
           () =>
             runMedia(
@@ -606,7 +611,10 @@ export class Recorder {
                 "-y",
                 "-i",
                 this.store.path(event.id),
-                ...playbackArguments(),
+                ...playbackArguments({
+                  copyVideo: event.playbackVersion >= 2,
+                  audioTrimSeconds: alignment.audioTrimSeconds,
+                }),
                 temporary,
               ],
               {
@@ -624,7 +632,12 @@ export class Recorder {
           event.id,
           (await stat(output)).size,
           PLAYBACK_VERSION,
-          diagnostics,
+          {
+            ...event.playbackInfo,
+            ...diagnostics,
+            ...alignment,
+            duration: info.duration,
+          },
         );
         return output;
       } finally {
