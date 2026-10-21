@@ -480,35 +480,48 @@ export class Recorder {
         { mode: 0o600 },
       );
       try {
-        await this.encoding.run(
-          () =>
-            runMedia(
-              "ffmpeg",
-              [
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-nostdin",
-                "-y",
-                "-f",
-                "concat",
-                "-safe",
-                "0",
-                "-i",
-                manifest,
-                ...(this.config.record_audio
-                  ? ["-c:a", "aac", "-b:a", "96k"]
-                  : ["-an"]),
-                ...playbackArguments(),
-                temporary,
-              ],
-              {
-                timeout: Math.max(120000, this.config.max_event_seconds * 1500),
-                signal: this.playbackAbort.signal,
-              },
-            ),
-          10,
-        );
+        await this.encoding.run(async () => {
+          // One FFmpeg process keeps a fixed output codec. Check each ring
+          // generation, including reconnects, before copying its H264 packets.
+          const sources = new Map(
+            ready.map((part) => [
+              part.path.replace(/-\d{9,}\.mp4$/, ""),
+              part.path,
+            ]),
+          );
+          let copyVideo = true;
+          for (const source of sources.values()) {
+            if ((await probe(source)).codec !== "h264") {
+              copyVideo = false;
+              break;
+            }
+          }
+          return runMedia(
+            "ffmpeg",
+            [
+              "-hide_banner",
+              "-loglevel",
+              "error",
+              "-nostdin",
+              "-y",
+              "-f",
+              "concat",
+              "-safe",
+              "0",
+              "-i",
+              manifest,
+              ...(this.config.record_audio
+                ? ["-c:a", "aac", "-b:a", "96k"]
+                : ["-an"]),
+              ...playbackArguments({ copyVideo }),
+              temporary,
+            ],
+            {
+              timeout: Math.max(120000, this.config.max_event_seconds * 1500),
+              signal: this.playbackAbort.signal,
+            },
+          );
+        }, 10);
         const info = await probe(temporary);
         if (info.duration < 0.1) throw new Error("empty_video");
         await rename(temporary, output);

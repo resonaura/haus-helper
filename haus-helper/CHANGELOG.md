@@ -1,3 +1,9 @@
+# 0.3.9
+
+- Remux H264 recordings without re-encoding their pictures or forcing a different frame cadence. Keep audio normalization and seekable MP4 output while reducing finalization work on Home Assistant.
+- Check each pre-event ring generation, including reconnects, and retain compatible H264/AAC conversion for other video codecs. Original recordings and existing playback copies remain unchanged.
+- Verify real decoded frame checksums/cadence, non-H264 conversion, audio and restart recovery.
+
 # 0.3.8
 
 - Refresh recording metadata on NVR nodes after catalog-field upgrades, even when media bytes were already replicated. Preserve blob copies and avoid re-uploading them.

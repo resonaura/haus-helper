@@ -15,6 +15,7 @@ import { once } from "node:events";
 import { setTimeout as pause } from "node:timers/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createHash } from "node:crypto";
 import { Store } from "../lib/store.mjs";
 import { Recorder, parseSegments } from "../lib/recorder.mjs";
 import { runMedia } from "../lib/media.mjs";
@@ -71,7 +72,7 @@ test(
         "-f",
         "lavfi",
         "-i",
-        "color=c=gray:s=160x90:r=10",
+        "testsrc2=size=160x90:rate=10",
         "-t",
         "12",
         "-c:v",
@@ -99,6 +100,31 @@ test(
     assert.ok(result.duration >= 11.9);
     assert.ok(result.bytes > 1000);
     assert.ok((await stat(store.path(event.id, "jpg"))).size > 0);
+    const hashes = async (path) => {
+      const { stdout } = await runMedia("ffmpeg", [
+        "-v",
+        "error",
+        "-i",
+        path,
+        "-map",
+        "0:v:0",
+        "-fps_mode",
+        "passthrough",
+        "-f",
+        "framemd5",
+        "-",
+      ]);
+      const frames = stdout
+        .split("\n")
+        .filter((line) => line && !line.startsWith("#"))
+        .map((line) => line.split(",").at(-1).trim());
+      return createHash("sha256").update(frames.join("\n")).digest("hex");
+    };
+    assert.equal(
+      await hashes(store.path(event.id)),
+      await hashes(join(dir, name)),
+      "compatible H264 pictures retain their exact decoded pixels and cadence",
+    );
   },
 );
 test("a missing camera buffer records an honest failure rather than an empty playable clip", async (t) => {
@@ -107,6 +133,62 @@ test("a missing camera buffer records an honest failure rather than an empty pla
   await recorder.finish(event);
   assert.equal(store.get(event.id).status, "failed");
   assert.equal(store.get(event.id).videoUrl, undefined);
+});
+test("non-H264 recording segments retain the compatible H264/AAC conversion", async (t) => {
+  const { dir, store, recorder } = await fixture(t);
+  const at = Date.now() - 2000;
+  const name = `b${at}-a1b2c3d4-000000000.mp4`;
+  await runMedia("ffmpeg", [
+    "-v",
+    "error",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc2=size=160x90:rate=10:duration=2",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=500:sample_rate=16000:duration=2",
+    "-c:v",
+    "mpeg4",
+    "-c:a",
+    "aac",
+    join(dir, name),
+  ]);
+  await writeFile(join(dir, "index.csv"), `${name},0,2\n`);
+  await utimes(join(dir, name), new Date(at + 2000), new Date(at + 2000));
+  recorder.buffers.set("camera.test", { dir, stopped: true });
+  const event = recorder.trigger("camera.test", "motion", undefined, at + 1000);
+  await recorder.finish(event);
+  assert.equal(store.get(event.id).status, "ready");
+  const { stdout } = await runMedia("ffprobe", [
+    "-v",
+    "error",
+    "-show_entries",
+    "stream=codec_name,codec_type",
+    "-of",
+    "json",
+    store.path(event.id),
+  ]);
+  const { streams } = JSON.parse(stdout);
+  assert.equal(
+    streams.find((stream) => stream.codec_type === "video").codec_name,
+    "h264",
+  );
+  assert.equal(
+    streams.find((stream) => stream.codec_type === "audio").codec_name,
+    "aac",
+  );
+  await runMedia("ffmpeg", [
+    "-v",
+    "error",
+    "-i",
+    store.path(event.id),
+    "-f",
+    "null",
+    "-",
+  ]);
 });
 test(
   "restart recovers a pending event from its persisted pre-event ring without blocking new ingest",
