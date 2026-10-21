@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 import { recordingMetadata } from "./recording-metadata.mjs";
 import { stat } from "node:fs/promises";
 import { nodeAddress, nodeRequest, nodeJson } from "./node-client.mjs";
@@ -16,6 +16,22 @@ export class Cluster {
       .exec(`CREATE TABLE IF NOT EXISTS cluster_nodes(id TEXT PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS cluster_locations(digest TEXT NOT NULL,node_id TEXT NOT NULL,kind TEXT NOT NULL,PRIMARY KEY(digest,node_id));
  CREATE TABLE IF NOT EXISTS cluster_media(event_id TEXT PRIMARY KEY,digest TEXT NOT NULL,bytes INTEGER NOT NULL,version INTEGER NOT NULL);`);
+    // Existing blob copies remain valid; their catalog may predate newly
+    // supported repair fields. Reconcile metadata without uploading the blob.
+    const columns = new Set(
+      store.db
+        .prepare("PRAGMA table_info(cluster_locations)")
+        .all()
+        .map((column) => column.name),
+    );
+    if (!columns.has("catalog_version"))
+      store.db.exec(
+        "ALTER TABLE cluster_locations ADD COLUMN catalog_version INTEGER NOT NULL DEFAULT 0",
+      );
+    if (!columns.has("metadata_hash"))
+      store.db.exec(
+        "ALTER TABLE cluster_locations ADD COLUMN metadata_hash TEXT",
+      );
   }
   nodes() {
     return this.store.db
@@ -161,16 +177,32 @@ export class Cluster {
     for (const node of nodes) {
       if (this.stopped) return;
       try {
+        let metadata, metadataHash;
+        if (kind === "media") {
+          const row = this.store.db
+            .prepare("SELECT event_id FROM cluster_media WHERE digest=?")
+            .get(digest);
+          if (!row) continue;
+          metadata = recordingMetadata(this.store.get(row.event_id));
+          metadataHash = createHash("sha256")
+            .update(JSON.stringify(metadata))
+            .digest("hex");
+        }
+        const location = this.store.db
+          .prepare(
+            "SELECT catalog_version, metadata_hash FROM cluster_locations WHERE digest=? AND node_id=?",
+          )
+          .get(digest, node.id);
         if (
-          this.store.db
-            .prepare(
-              "SELECT 1 FROM cluster_locations WHERE digest=? AND node_id=?",
-            )
-            .get(digest, node.id)
+          location &&
+          (kind !== "media" ||
+            (location.catalog_version === 1 &&
+              location.metadata_hash === metadataHash))
         )
           continue;
         const status = this.health.get(node.id)?.remote;
         if (
+          !location &&
           status?.storage &&
           status.storage.maxBytes -
             status.storage.usedBytes -
@@ -215,23 +247,26 @@ export class Cluster {
           });
         }
         if (kind === "media") {
-          const row = this.store.db
-            .prepare("SELECT event_id FROM cluster_media WHERE digest=?")
-            .get(digest);
           await nodeJson(node, "/v1/recordings", {
             method: "POST",
             data: {
               digest,
-              event: recordingMetadata(this.store.get(row.event_id)),
+              event: metadata,
             },
             signal: this.abort.signal,
           });
         }
         this.store.db
           .prepare(
-            "INSERT OR REPLACE INTO cluster_locations(digest,node_id,kind)VALUES(?,?,?)",
+            "INSERT OR REPLACE INTO cluster_locations(digest,node_id,kind,catalog_version,metadata_hash)VALUES(?,?,?,?,?)",
           )
-          .run(digest, node.id, kind);
+          .run(
+            digest,
+            node.id,
+            kind,
+            kind === "media" ? 1 : 0,
+            metadataHash ?? null,
+          );
         this.errors.delete(node.id);
       } catch {
         this.errors.set(node.id, "Copy pending · will retry");
@@ -266,7 +301,7 @@ export class Cluster {
       const events = nodeIds.length
         ? this.store.db
             .prepare(
-              `SELECT e.id FROM events e LEFT JOIN cluster_media m ON m.event_id=e.id WHERE e.status='ready' AND (m.event_id IS NULL OR m.version!=e.playback_version OR (SELECT count(*) FROM cluster_locations l WHERE l.digest=m.digest AND l.node_id IN (${nodeIds.map(() => "?").join(",")}))<?) ORDER BY e.start_at DESC LIMIT 8`,
+              `SELECT e.id FROM events e LEFT JOIN cluster_media m ON m.event_id=e.id WHERE e.status='ready' AND (m.event_id IS NULL OR m.version!=e.playback_version OR (SELECT count(*) FROM cluster_locations l WHERE l.digest=m.digest AND l.catalog_version=1 AND l.node_id IN (${nodeIds.map(() => "?").join(",")}))<?) ORDER BY e.start_at DESC LIMIT 8`,
             )
             .all(...nodeIds, Math.min(2, nodeIds.length))
         : [];

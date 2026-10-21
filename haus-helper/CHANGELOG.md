@@ -1,3 +1,9 @@
+# 0.3.8
+
+- Refresh recording metadata on NVR nodes after catalog-field upgrades, even when media bytes were already replicated. Preserve blob copies and avoid re-uploading them.
+- Fingerprint authoritative event metadata so changed repair information is republished independently of identical media hashes. Migrate old location records lazily in bounded batches; failed node updates remain retryable.
+- Add real SQLite/HTTP regressions for old catalogs, identical-byte playback updates, bounded migration and failure recovery.
+
 # 0.3.7
 
 - Keep a flowing recording/prebuffer alive through up to 30 seconds of transient HA camera snapshot/proxy unavailability. Repeated state updates and registry refreshes cannot extend that deadline.
