@@ -189,6 +189,13 @@ export class Store {
       .run(version, bytes, JSON.stringify(diagnostics), id);
   }
   present(row) {
+    const playbackInfo = row.playback_info
+      ? JSON.parse(row.playback_info)
+      : undefined;
+    const duration =
+      Number.isFinite(playbackInfo?.duration) && playbackInfo.duration > 0
+        ? playbackInfo.duration
+        : row.duration;
     return {
       id: row.id,
       cameraId: row.camera_id,
@@ -200,14 +207,13 @@ export class Store {
       status: row.status,
       kinds: JSON.parse(row.kinds),
       detections: JSON.parse(row.detections),
-      duration: row.duration,
+      duration,
+      ...(duration !== row.duration ? { originalDuration: row.duration } : {}),
       bytes: row.bytes,
       error: row.error,
       playbackVersion: row.playback_version,
       playbackBytes: row.playback_bytes,
-      playbackInfo: row.playback_info
-        ? JSON.parse(row.playback_info)
-        : undefined,
+      playbackInfo,
       videoUrl:
         row.status === "ready" ? `api/events/${row.id}/video` : undefined,
       thumbnailUrl:

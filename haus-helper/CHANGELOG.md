@@ -1,3 +1,9 @@
+# 0.3.6
+
+- End camera playback at the actual video boundary instead of a long audio-only tail. Preserve originals and create versioned playback copies.
+- Realign a legacy silent audio lead only when event boundaries and measured near-silence agree; retain ambiguous audio timing. Copy already normalized video instead of needlessly encoding it again.
+- Report prepared duration to the timeline while retaining original duration for audits and cluster metadata. Add real audio/container and metadata regressions.
+
 # 0.3.5
 
 - Activity assist chooses the least-loaded eligible NVR node using CPU, working memory, stream load and reserved analysis capacity. Keep healthy assignments stable and pause or move overloaded workers.

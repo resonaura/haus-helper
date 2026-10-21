@@ -39,6 +39,21 @@ test("paginates deterministically across equal timestamps and filters by detecti
   assert.equal(store.list({ kind: "person" }).events.length, 2);
   assert.throws(() => store.list({ cursor: "bad" }), /invalid_cursor/);
 });
+test("prepared playback duration changes the timeline without rewriting original media metadata", async (t) => {
+  const store = await fixture(t);
+  const event = store.create("camera.entry", "motion", 1000, 3000);
+  store.finish(event.id, { duration: 1002, bytes: 20000, playbackVersion: 2 });
+  store.setPlayback(event.id, 5000, 3, { duration: 2, audioTrimSeconds: 1000 });
+  const prepared = store.get(event.id);
+  assert.equal(prepared.duration, 2);
+  assert.equal(prepared.originalDuration, 1002);
+  assert.equal(store.list({ limit: 10 }).events[0].duration, 2);
+  assert.equal(
+    store.db.prepare("SELECT duration FROM events WHERE id=?").get(event.id)
+      .duration,
+    1002,
+  );
+});
 test("combines overlapping activity into one event with multiple object labels", async (t) => {
   const store = await fixture(t);
   const event = store.create("camera.entry", "motion", 1000, 3000);

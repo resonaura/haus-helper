@@ -14,6 +14,7 @@ export function recordingMetadata(event) {
       "endAt",
       "mediaStartAt",
       "duration",
+      "originalDuration",
       "kinds",
       "playbackVersion",
     ]
@@ -28,6 +29,9 @@ export function recordingMetadata(event) {
                   audio: event.playbackInfo.audio,
                   sourceAudioMissing: event.playbackInfo.sourceAudioMissing,
                   largestGap: event.playbackInfo.largestGap,
+                  duration: event.playbackInfo.duration,
+                  audioTailSeconds: event.playbackInfo.audioTailSeconds,
+                  audioTrimSeconds: event.playbackInfo.audioTrimSeconds,
                 },
               ],
             ]
