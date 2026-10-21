@@ -1,3 +1,9 @@
+# 0.3.7
+
+- Keep a flowing recording/prebuffer alive through up to 30 seconds of transient HA camera snapshot/proxy unavailability. Repeated state updates and registry refreshes cannot extend that deadline.
+- Respect explicit camera off immediately; stale/stopped buffers and disabled recording receive no grace. New unavailable cameras are never invented online.
+- Keep availability history, recorder, warming and optional analysis consistent; verify expiry, registry replacement, recovery and privacy regressions.
+
 # 0.3.6
 
 - End camera playback at the actual video boundary instead of a long audio-only tail. Preserve originals and create versioned playback copies.

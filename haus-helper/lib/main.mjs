@@ -1,3 +1,4 @@
+import { CameraAvailability } from "./camera-availability.mjs";
 import { WarmStreams } from "./warm-streams.mjs";
 import { Motion } from "./motion.mjs";
 import { SharedConfig } from "./shared-config.mjs";
@@ -37,6 +38,7 @@ let registry = { states: [], entities: [], devices: [], cameras: [] };
 let refreshing;
 let dirty = false;
 const recorder = new Recorder(config, ha, store);
+const availability = new CameraAvailability();
 const warm = new WarmStreams(ha, recorder, cluster);
 const motion = new Motion({ ha, recorder, cluster, warm, config });
 await motion.initialize();
@@ -48,11 +50,13 @@ const observeAvailability = () => {
     )?.state;
     store.observeAvailability(
       camera.id,
-      !ha.connected || !state || state === "unknown"
+      !ha.connected
         ? "unknown"
         : camera.available
           ? "online"
-          : "offline",
+          : !state || state === "unknown"
+            ? "unknown"
+            : "offline",
       at,
     );
   }
@@ -64,6 +68,7 @@ const apply = () => {
     registry.devices,
     store.overrides(),
   );
+  availability.apply(registry.cameras, registry.states, recorder.buffers);
   recorder.sync(registry.cameras);
   warm.sync(registry.cameras);
   motion.sync(registry.cameras);
@@ -115,11 +120,9 @@ ha.on("event", (event) => {
       ? registry.states.map((state) => (state.entity_id === id ? next : state))
       : [...registry.states, next]
     : registry.states.filter((state) => state.entity_id !== id);
+  if (id.startsWith("camera."))
+    availability.apply(registry.cameras, registry.states, recorder.buffers);
   for (const camera of registry.cameras) {
-    if (camera.id === id) {
-      camera.available =
-        next && !["unavailable", "unknown", "off"].includes(next.state);
-    }
     for (const sensor of camera.sensors)
       if (sensor.id === id) sensor.active = next?.state === "on";
     if (
@@ -176,7 +179,14 @@ const distribution = setInterval(
 );
 const warming = setInterval(() => void warm.tick().catch(() => {}), 4000);
 const detection = setInterval(() => void motion.tick().catch(() => {}), 4000);
-const availabilityHeartbeat = setInterval(observeAvailability, 10000);
+const availabilityHeartbeat = setInterval(() => {
+  if (availability.apply(registry.cameras, registry.states, recorder.buffers)) {
+    recorder.sync(registry.cameras);
+    warm.sync(registry.cameras);
+    motion.sync(registry.cameras);
+  }
+  observeAvailability();
+}, 2000);
 let stopping = false;
 async function stop() {
   if (stopping) return;
