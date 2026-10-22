@@ -57,6 +57,46 @@ test("shared physical device is authoritative; ambiguity, disabled entries and r
       undefined,
     );
 });
+test("unavailable or disabled P2P telemetry cannot select a native camera transport", () => {
+  const p2p = state("garden_p2p_rtsp_stream", "unavailable");
+  const native = state("garden_native_rtsp_stream", "rtsp://camera.lan/native");
+  const legacy = state("garden_rtsp_stream", "rtsp://camera.lan/legacy");
+  const p2pEntry = { entity_id: p2p.entity_id, device_id: "physical" };
+  const nativeEntry = { entity_id: native.entity_id, device_id: "physical" };
+  const otherP2p = state("other_p2p_rtsp_stream", "rtsp://camera.lan/other");
+  assert.equal(
+    directRecordingInput(
+      camera,
+      [p2p, otherP2p],
+      [p2pEntry, { entity_id: otherP2p.entity_id, device_id: "physical" }],
+    ),
+    undefined,
+  );
+  assert.equal(
+    directRecordingInput(
+      camera,
+      [p2p, native, legacy],
+      [p2pEntry, nativeEntry],
+    ),
+    undefined,
+  );
+  assert.equal(
+    directRecordingInput(
+      camera,
+      [native, legacy],
+      [{ ...p2pEntry, disabled_by: "user" }, nativeEntry],
+    ),
+    undefined,
+  );
+  assert.equal(
+    directRecordingInput(
+      camera,
+      [{ ...p2p, state: "rtsp://camera.lan/p2p" }, native],
+      [p2pEntry, nativeEntry],
+    ),
+    "rtsp://camera.lan/p2p",
+  );
+});
 test("HA credentials are absent from direct input and fallback keeps the authenticated HLS path", async () => {
   const ha = new HaClient({ token: "ha-secret" });
   ha.inputRegistry = {
