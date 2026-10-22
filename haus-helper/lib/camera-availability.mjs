@@ -22,10 +22,15 @@ export class CameraAvailability {
       if (!ids.has(id)) this.entries.delete(id);
     let changed = false;
     for (const camera of cameras) {
-      const state = stateMap.get(camera.id);
+      // An idle Generic wrapper can serve placeholder frames indefinitely. Its
+      // physical aliases must recover too before starting a new grace period.
+      const sourceStates = [camera.id, ...(camera.aliases ?? [])].map((id) =>
+        stateMap.get(id),
+      );
       let entry = this.entries.get(camera.id);
-      const online =
-        state && !["unknown", "unavailable", "off"].includes(state);
+      const online = sourceStates.every(
+        (state) => state && !["unknown", "unavailable", "off"].includes(state),
+      );
       if (online) entry = { online: true };
       else {
         entry ??= { online: false };
@@ -39,7 +44,7 @@ export class CameraAvailability {
         // Placeholder frames cannot keep an offline source available forever.
         // Only actual HA recovery starts a new grace period.
         entry.online =
-          state !== "off" &&
+          !sourceStates.includes("off") &&
           camera.enabled &&
           entry.online &&
           flowing &&

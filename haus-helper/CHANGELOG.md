@@ -1,3 +1,8 @@
+# 0.3.16
+
+- Honor physical-source availability throughout periodic heartbeats and state updates. An idle camera wrapper no longer overwrites its offline source or repeatedly restarts its recovery grace.
+- Keep the existing 30-second grace only for previously flowing recordings, stop explicit off immediately, and retain recording preferences for automatic recovery. Verify the complete discovery-to-heartbeat path, not discovery alone.
+
 # 0.3.15
 
 - Inherit availability from an explicitly paired physical camera source. A Generic wrapper serving an offline image cannot keep recording/preheating that placeholder; retain its saved recording policy so it resumes when the source returns. Standalone cameras and unrelated devices keep their own availability.
