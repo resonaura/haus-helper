@@ -58,6 +58,10 @@ test(
       "2",
       "-c:v",
       "libx264",
+      "-g",
+      "10",
+      "-bf",
+      "0",
       "-threads",
       "1",
       source,
@@ -83,6 +87,10 @@ test(
     };
     recorder.buffers.set(buffer.id, buffer);
     await recorder.startBuffer(buffer);
+    let fixtureErrors = "";
+    buffer.process?.stderr.on("data", (chunk) => {
+      fixtureErrors = (fixtureErrors + chunk).slice(-2000);
+    });
     const deadline = performance.now() + 15000;
     while (
       buffer.status !== "buffering" ||
@@ -90,7 +98,7 @@ test(
     ) {
       assert.ok(
         performance.now() < deadline,
-        "fallback must produce real pre-roll",
+        `fallback must produce real pre-roll (${buffer.status}): ${fixtureErrors}`,
       );
       await pause(50);
     }
