@@ -20,6 +20,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { runMedia, probe, sourceHasAudio } from "./media.mjs";
 import { inspectAudioAlignment } from "./playback-audio.mjs";
 import { PrimarySourceRecovery } from "./primary-source-recovery.mjs";
+import { RecordingProgress } from "./recording-progress.mjs";
 export class Recorder {
   constructor(config, ha, store, onChange = () => {}, { prepareRemote } = {}) {
     this.config = config;
@@ -227,23 +228,15 @@ export class Recorder {
       buffer.lastSegmentAt = undefined;
       buffer.lastFrame = -1;
       buffer.lastError = undefined;
-      let progress = "";
+      const progress = new RecordingProgress();
       child.stdout.on("data", (chunk) => {
-        progress = (progress + chunk.toString()).slice(-8192);
-        const lines = progress.split("\n");
-        progress = lines.pop() ?? "";
-        for (const line of lines) {
-          const match = /^frame=(\d+)/.exec(line);
-          if (match && Number(match[1]) > buffer.lastFrame) {
-            buffer.lastFrame = Number(match[1]);
-            buffer.lastAdvance = Date.now();
-            if (buffer.lastFrame > 0) {
-              buffer.status = "buffering";
-              buffer.failures = 0;
-              if (buffer.lastFrame >= 120 && input.kind === "rtsp")
-                buffer.directFailures = 0;
-            }
-          }
+        if (progress.push(chunk)) {
+          buffer.lastFrame = progress.frames;
+          buffer.lastAdvance = Date.now();
+          buffer.status = "buffering";
+          buffer.failures = 0;
+          if (progress.sustained && input.kind === "rtsp")
+            buffer.directFailures = 0;
         }
       });
       child.stderr.on("data", () => {});
