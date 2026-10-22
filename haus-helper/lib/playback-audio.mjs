@@ -19,13 +19,8 @@ export async function inspectAudioAlignment(path, expectedSeconds) {
   const video = Number(streams.find((s) => s.codec_type === "video")?.duration);
   const audio = Number(streams.find((s) => s.codec_type === "audio")?.duration);
   const excess = audio - video;
-  if (
-    !Number.isFinite(video) ||
-    video <= 0 ||
-    !Number.isFinite(excess) ||
-    excess <= 3
-  )
-    return {};
+  if (!Number.isFinite(video) || video <= 0) return {};
+  if (!Number.isFinite(excess) || excess <= 3) return { videoDuration: video };
   const diagnostics = { videoDuration: video, audioTailSeconds: excess };
   // A short video from a genuinely interrupted event is not evidence that its
   // later audio belongs at the beginning. Require the expected event boundary.

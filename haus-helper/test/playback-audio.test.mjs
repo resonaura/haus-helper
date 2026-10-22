@@ -50,6 +50,7 @@ test("repairs a proven silent audio lead and caps playback at the actual video",
     ...playbackArguments({
       copyVideo: true,
       audioTrimSeconds: alignment.audioTrimSeconds,
+      videoDuration: alignment.videoDuration,
     }),
     output,
   ]);
@@ -110,6 +111,33 @@ test("repairs a proven silent audio lead and caps playback at the actual video",
     undefined,
     "real audio before the proposed boundary must never be silently shifted",
   );
+  const unchanged = await readFile(ambiguous);
+  const unshifted = await inspectAudioAlignment(ambiguous, 2);
+  await runMedia("ffmpeg", [
+    "-v",
+    "error",
+    "-y",
+    "-i",
+    ambiguous,
+    ...playbackArguments({ videoDuration: unshifted.videoDuration }),
+    output,
+  ]);
+  const bounded = await runMedia("ffprobe", [
+    "-v",
+    "error",
+    "-show_entries",
+    "format=duration:stream=codec_type,duration",
+    "-of",
+    "json",
+    output,
+  ]);
+  const boundedInfo = JSON.parse(bounded.stdout);
+  assert.ok(Number(boundedInfo.format.duration) < 2.2);
+  assert.ok(
+    Number(boundedInfo.streams.find((s) => s.codec_type === "audio").duration) <
+      2.2,
+  );
+  assert.deepEqual(await readFile(ambiguous), unchanged);
 });
 test("a short audio track cannot truncate the remaining camera video", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "haus-short-audio-"));
