@@ -9,18 +9,33 @@ export function directRecordingInput(camera, states, entities) {
   const devices = new Set(
     [camera.deviceId, ...(camera.deviceIds ?? [])].filter(Boolean),
   );
+  const associated = (id) =>
+    stems.some(
+      (stem) =>
+        id === `sensor.${stem}_p2p_rtsp_stream` ||
+        id === `sensor.${stem}_rtsp_stream` ||
+        id === `sensor.${stem}_rtsp_stream_url`,
+    ) || devices.has(entries.get(id)?.device_id);
+  // An unavailable or disabled P2P endpoint is not permission to change the
+  // camera transport. HA fallback preserves its configured integration path.
+  const p2p = [...states, ...entities].filter(
+    (entry) =>
+      /^sensor\..*_p2p_rtsp_stream$/.test(entry.entity_id) &&
+      associated(entry.entity_id),
+  );
+  const exactP2p = p2p.filter((entry) =>
+    stems.some((stem) => entry.entity_id === `sensor.${stem}_p2p_rtsp_stream`),
+  );
+  const p2pSources = new Set(
+    (exactP2p.length ? exactP2p : p2p).map((entry) => entry.entity_id),
+  );
   const candidates = states.filter((state) => {
     const entry = entries.get(state.entity_id);
     return (
       !entry?.disabled_by &&
       /^sensor\..*_rtsp_stream(?:_url)?$/.test(state.entity_id) &&
-      (stems.some(
-        (stem) =>
-          state.entity_id === `sensor.${stem}_p2p_rtsp_stream` ||
-          state.entity_id === `sensor.${stem}_rtsp_stream` ||
-          state.entity_id === `sensor.${stem}_rtsp_stream_url`,
-      ) ||
-        (entry?.device_id && devices.has(entry.device_id)))
+      (!p2pSources.size || p2pSources.has(state.entity_id)) &&
+      associated(state.entity_id)
     );
   });
   let best = 0;

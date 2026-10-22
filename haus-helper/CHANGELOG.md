@@ -1,3 +1,8 @@
+# 0.3.14
+
+- Preserve an explicitly registered P2P camera source during unavailable or disabled telemetry. Do not silently substitute native/legacy RTSP telemetry from the same camera; retain the configured HA fallback until the P2P restream returns.
+- Cover unavailable, disabled, restored and unrelated P2P sources without changing camera settings or exposing stream URLs.
+
 # 0.3.13
 
 - Recognize advancing output timestamps when stream-copy FFmpeg omits its frame counter; repeated or invalid progress cannot hide a stall.
