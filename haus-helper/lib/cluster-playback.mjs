@@ -53,7 +53,7 @@ export async function prepareClusterPlayback(
     .filter((node) =>
       cluster.store.db
         .prepare(
-          "SELECT 1 FROM cluster_locations WHERE node_id=? AND digest=? AND kind='recording'",
+          "SELECT 1 FROM cluster_locations WHERE node_id=? AND digest=? AND kind='media'",
         )
         .get(node.id, digest),
     )

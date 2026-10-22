@@ -166,7 +166,7 @@ async function fixture(t) {
     if (replicated)
       store.db
         .prepare(
-          "INSERT INTO cluster_locations(digest,node_id,kind)VALUES(?,?,'recording')",
+          "INSERT INTO cluster_locations(digest,node_id,kind)VALUES(?,?,'media')",
         )
         .run(digest(media), node.id);
     return { node, calls };

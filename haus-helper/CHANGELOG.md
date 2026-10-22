@@ -1,6 +1,7 @@
 # 0.3.12
 
 - Finish bounded NVR job registration before handling cancellation, so an accepted encoder is deleted even if its response arrives after playback is cancelled.
+- Match actual replicated media catalog rows when selecting an existing NVR original.
 - Prepare native playback on a capable, lightly loaded optional NVR worker when that node already has the original recording. Retain originals and the authoritative playback copy on Home Assistant.
 - Respect worker CPU/memory admission, reserve one in-flight task per node, verify returned size/SHA-256/MP4/audio, release remote work and preserve bounded local fallback for old, weak, unsynced, failed or disconnected workers. Never send camera URLs or Home Assistant credentials to an encoder job.
 - Expose remote processing in authenticated diagnostics. Validate source preservation, concurrency, cancellation, checksums, container failures and fallback; exercise the coupled real HTTP/FFmpeg path and native decoding before deployment.
