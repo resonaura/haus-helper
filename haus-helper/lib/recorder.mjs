@@ -469,6 +469,7 @@ export class Recorder {
       const manifest = join(this.config.data, `${event.id}.concat`);
       const output = this.store.path(event.id);
       const temporary = output.replace(".mp4", ".partial.mp4");
+      let packetCopy = false;
       await writeFile(
         manifest,
         ready
@@ -496,6 +497,7 @@ export class Recorder {
               break;
             }
           }
+          packetCopy = copyVideo;
           return runMedia(
             "ffmpeg",
             [
@@ -549,7 +551,7 @@ export class Recorder {
         this.store.finish(event.id, {
           duration: info.duration,
           bytes: file.size,
-          playbackVersion: PLAYBACK_VERSION,
+          playbackVersion: packetCopy ? 0 : PLAYBACK_VERSION,
           // The event starts at detection; the file starts in the pre-event ring.
           // Persist the actual boundary, including a keyframe-aligned extra segment.
           mediaStartAt: Math.round(ready[0].start),
@@ -558,7 +560,7 @@ export class Recorder {
               ? "Partial recording: the camera stream stopped"
               : null,
         });
-        this.store.setPlayback(event.id, 0, PLAYBACK_VERSION, {
+        this.store.setPlayback(event.id, 0, packetCopy ? 0 : PLAYBACK_VERSION, {
           audio: info.audio,
           sourceAudioMissing: this.config.record_audio && !info.audio,
         });
@@ -625,7 +627,9 @@ export class Recorder {
                 "-i",
                 this.store.path(event.id),
                 ...playbackArguments({
-                  copyVideo: event.playbackVersion >= 2,
+                  // Version 3 also described unnormalized packet copies.
+                  // Only version 2 guarantees the earlier normalized video.
+                  copyVideo: event.playbackVersion === 2,
                   audioTrimSeconds: alignment.audioTrimSeconds,
                 }),
                 temporary,

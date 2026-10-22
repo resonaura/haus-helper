@@ -1,5 +1,5 @@
 import { runMedia } from "./media.mjs";
-export const PLAYBACK_VERSION = 3;
+export const PLAYBACK_VERSION = 4;
 /** Fixed cadence and bounded GOPs avoid multi-second decoder starvation and expensive seeks. */
 export function playbackArguments({
   copyVideo = false,
