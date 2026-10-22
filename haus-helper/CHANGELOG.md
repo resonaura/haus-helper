@@ -1,3 +1,8 @@
+# 0.3.15
+
+- Inherit availability from an explicitly paired physical camera source. A Generic wrapper serving an offline image cannot keep recording/preheating that placeholder; retain its saved recording policy so it resumes when the source returns. Standalone cameras and unrelated devices keep their own availability.
+- Cover unavailable, unknown, off and recovered source states, plus an unavailable wrapper with an online source.
+
 # 0.3.14
 
 - Preserve an explicitly registered P2P camera source during unavailable or disabled telemetry. Do not silently substitute native/legacy RTSP telemetry from the same camera; retain the configured HA fallback until the P2P restream returns.
