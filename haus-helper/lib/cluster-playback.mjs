@@ -79,13 +79,15 @@ export async function prepareClusterPlayback(
         continue;
       let result = await nodeJson(node, "/v1/playback", {
         method: "POST",
-        signal: abort,
+        // Learn the accepted job ID even if playback is cancelled while this
+        // bounded registration is in flight, so finally can stop its encoder.
         timeout: 15000,
         data: { digest, profile: 1, audioTrimSeconds },
       });
       if (typeof result.id !== "string" || !/^[a-f0-9-]{36}$/.test(result.id))
         throw new Error("invalid_playback_job");
       id = result.id;
+      abort.throwIfAborted();
       const deadline =
         performance.now() +
         Math.min(240000, Math.max(60000, (Number(event.duration) || 0) * 3000));

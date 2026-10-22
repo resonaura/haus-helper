@@ -86,6 +86,7 @@ async function fixture(t) {
     checksum = digest(payload),
     onStart = () => {},
     alwaysPending = false,
+    registrationDelay = 0,
   } = {}) => {
     const authenticate = authenticator(key),
       calls = { started: 0, deleted: 0, polls: 0 };
@@ -106,6 +107,10 @@ async function fixture(t) {
         assert.equal(JSON.parse(bytes).digest, digest(media));
         calls.started++;
         onStart();
+        if (registrationDelay)
+          await new Promise((resolve) =>
+            setTimeout(resolve, registrationDelay),
+          );
         return json(res, 202, { id: job, status: "preparing" });
       }
       if (req.method === "GET" && req.url === `/v1/playback/${job}`) {
@@ -234,6 +239,35 @@ test("connection cancellation stops polling and releases accepted remote work", 
   assert.equal(node.calls.deleted, 1);
   assert.equal(f.cluster.playbackNodes.size, 0);
   assert.deepEqual(await readFile(f.store.path(f.event.id)), media);
+});
+
+test("cancellation before the registration response still deletes the accepted job", async (t) => {
+  for (const stopCluster of [false, true]) {
+    const f = await fixture(t),
+      abort = new AbortController();
+    const node = await f.add({
+      alwaysPending: true,
+      registrationDelay: 150,
+      onStart: () => {
+        if (stopCluster) f.cluster.abort.abort();
+        else abort.abort();
+      },
+    });
+    await assert.rejects(
+      () =>
+        f.cluster.preparePlayback(f.event, {
+          output: f.output,
+          signal: abort.signal,
+        }),
+      { name: "AbortError" },
+    );
+    assert.equal(node.calls.started, 1);
+    assert.equal(node.calls.deleted, 1);
+    assert.equal(node.calls.polls, 0);
+    assert.equal(f.cluster.playbackNodes.size, 0);
+    await assert.rejects(() => access(f.output));
+    assert.deepEqual(await readFile(f.store.path(f.event.id)), media);
+  }
 });
 
 test("the original can never be used as generated output", async (t) => {
