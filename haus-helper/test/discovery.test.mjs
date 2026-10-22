@@ -135,6 +135,52 @@ test("canonicalizes matching Generic wrappers and inherits their internal device
   assert.equal(cameras[1].sensors.length, 0);
 });
 
+test("a camera wrapper cannot make an unavailable physical source appear online", () => {
+  const entries = [
+    { entity_id: "camera.room", platform: "generic" },
+    { entity_id: "camera.room_internal", platform: "tuya", device_id: "real" },
+  ];
+  for (const sourceState of [
+    "unavailable",
+    "unknown",
+    "off",
+    "idle",
+    "streaming",
+  ]) {
+    const cameras = discoverCameras(
+      [
+        { ...state("camera.room", "Room Camera"), state: "idle" },
+        {
+          ...state("camera.room_internal", "Room Camera Internal"),
+          state: sourceState,
+        },
+      ],
+      entries,
+      [],
+      { "camera.room": { enabled: true } },
+    );
+    assert.equal(cameras.length, 1);
+    assert.equal(
+      cameras[0].available,
+      ["idle", "streaming"].includes(sourceState),
+    );
+    assert.equal(cameras[0].enabled, true);
+    assert.deepEqual(cameras[0].aliases, ["camera.room_internal"]);
+  }
+  const cameras = discoverCameras(
+    [
+      { ...state("camera.room", "Room Camera"), state: "unavailable" },
+      {
+        ...state("camera.room_internal", "Room Camera Internal"),
+        state: "idle",
+      },
+    ],
+    entries,
+    [],
+  );
+  assert.equal(cameras[0].available, false);
+});
+
 test("battery warming policy uses physical aliases and ignores unassigned sensors", () => {
   const states = [
     state("camera.outdoor", "Outdoor"),

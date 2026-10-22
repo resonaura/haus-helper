@@ -103,6 +103,11 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
     camera.aliases = [...aliasOwner]
       .filter(([, id]) => id === camera.id)
       .map(([id]) => id);
+    // A Generic wrapper may keep serving a generated offline image while its
+    // physical source is gone. Do not warm or record that placeholder.
+    camera.available &&= camera.aliases.every(
+      (id) => allCameras.find((source) => source.id === id)?.available,
+    );
     camera.deviceIds = [
       camera.deviceId,
       ...camera.aliases.map((id) => registry.get(id)?.device_id),
