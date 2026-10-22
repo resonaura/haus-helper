@@ -114,26 +114,29 @@ export class HaClient extends EventEmitter {
     this.inputRegistry = { states, entities };
     return { states, entities, devices };
   }
-  async recordingInput(camera, allowDirect = true) {
-    const direct =
-      allowDirect &&
-      directRecordingInput(
-        camera,
-        this.inputRegistry.states,
-        this.inputRegistry.entities,
-      );
+  primaryRecordingInput(camera) {
+    const direct = directRecordingInput(
+      camera,
+      this.inputRegistry?.states ?? [],
+      this.inputRegistry?.entities ?? [],
+    );
     return direct
       ? {
           url: direct,
           kind: "rtsp",
           inputArguments: ["-rtsp_transport", "tcp"],
         }
-      : {
-          url: await this.stream(camera.id),
-          kind: "ha",
-          token: this.config.token,
-          inputArguments: ["-live_start_index", "-1", "-re"],
-        };
+      : undefined;
+  }
+  async recordingInput(camera, allowDirect = true) {
+    return (
+      (allowDirect && this.primaryRecordingInput(camera)) || {
+        url: await this.stream(camera.id),
+        kind: "ha",
+        token: this.config.token,
+        inputArguments: ["-live_start_index", "-1", "-re"],
+      }
+    );
   }
   async stream(cameraId) {
     const result = await this.request({

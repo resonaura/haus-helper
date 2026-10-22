@@ -19,6 +19,8 @@ import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { runMedia, probe, sourceHasAudio } from "./media.mjs";
 import { inspectAudioAlignment } from "./playback-audio.mjs";
+import { PrimarySourceRecovery } from "./primary-source-recovery.mjs";
+import { RecordingProgress } from "./recording-progress.mjs";
 export class Recorder {
   constructor(config, ha, store, onChange = () => {}, { prepareRemote } = {}) {
     this.config = config;
@@ -27,6 +29,7 @@ export class Recorder {
     this.onChange = onChange;
     this.prepareRemote = prepareRemote;
     this.remotePreparing = new Map();
+    this.primaryRecovery = new PrimarySourceRecovery();
     this.buffers = new Map();
     this.active = new Map();
     this.finalizing = new Set();
@@ -91,6 +94,7 @@ export class Recorder {
     for (const [id, buffer] of this.buffers) {
       if (!enabled.has(id)) {
         buffer.stopped = true;
+        this.primaryRecovery.cancel(buffer);
         buffer.probeAbort?.abort();
         this.terminateBuffer(buffer);
         clearTimeout(buffer.retry);
@@ -224,23 +228,15 @@ export class Recorder {
       buffer.lastSegmentAt = undefined;
       buffer.lastFrame = -1;
       buffer.lastError = undefined;
-      let progress = "";
+      const progress = new RecordingProgress();
       child.stdout.on("data", (chunk) => {
-        progress = (progress + chunk.toString()).slice(-8192);
-        const lines = progress.split("\n");
-        progress = lines.pop() ?? "";
-        for (const line of lines) {
-          const match = /^frame=(\d+)/.exec(line);
-          if (match && Number(match[1]) > buffer.lastFrame) {
-            buffer.lastFrame = Number(match[1]);
-            buffer.lastAdvance = Date.now();
-            if (buffer.lastFrame > 0) {
-              buffer.status = "buffering";
-              buffer.failures = 0;
-              if (buffer.lastFrame >= 120 && input.kind === "rtsp")
-                buffer.directFailures = 0;
-            }
-          }
+        if (progress.push(chunk)) {
+          buffer.lastFrame = progress.frames;
+          buffer.lastAdvance = Date.now();
+          buffer.status = "buffering";
+          buffer.failures = 0;
+          if (progress.sustained && input.kind === "rtsp")
+            buffer.directFailures = 0;
         }
       });
       child.stderr.on("data", () => {});
@@ -251,15 +247,22 @@ export class Recorder {
         if (input.kind === "rtsp")
           buffer.directFailures = (buffer.directFailures ?? 0) + 1;
         buffer.status = "reconnecting";
+        const primaryRecovered = buffer.primaryRecovered;
+        buffer.primaryRecovered = false;
         if (!buffer.stopped && !this.stopped)
           buffer.retry = setTimeout(
             () => void this.startBuffer(buffer),
-            Math.min(
-              30000,
-              2000 *
-                2 **
-                  Math.min((buffer.failures = (buffer.failures ?? 0) + 1), 4),
-            ),
+            primaryRecovered
+              ? 0
+              : Math.min(
+                  30000,
+                  2000 *
+                    2 **
+                      Math.min(
+                        (buffer.failures = (buffer.failures ?? 0) + 1),
+                        4,
+                      ),
+                ),
           );
       };
       child.once("error", exited);
@@ -376,6 +379,31 @@ export class Recorder {
         }
       }
       for (const buffer of this.buffers.values()) {
+        const camera = this.cameras?.find((item) => item.id === buffer.id);
+        if (this.ha.primaryRecordingInput)
+          this.primaryRecovery.consider(buffer, {
+            eligible: () =>
+              !this.stopped &&
+              !buffer.stopped &&
+              this.buffers.get(buffer.id) === buffer &&
+              buffer.inputKind === "ha" &&
+              buffer.status === "buffering" &&
+              !!buffer.process &&
+              !buffer.killTimer &&
+              camera?.enabled &&
+              camera.available &&
+              this.config.recording_enabled &&
+              !this.store
+                .recording()
+                .some((event) => event.cameraId === buffer.id),
+            find: () => this.ha.primaryRecordingInput(camera),
+            promote: () => {
+              buffer.directFailures = 0;
+              buffer.primaryRecovered = true;
+              buffer.status = "reconnecting";
+              this.terminateBuffer(buffer);
+            },
+          });
         const csv = buffer.listName
           ? await readFile(join(buffer.dir, buffer.listName), "utf8").catch(
               () => "",
@@ -713,6 +741,7 @@ export class Recorder {
   async stop() {
     this.stopped = true;
     this.playbackAbort.abort();
+    await this.primaryRecovery.stop();
     this.encoding.stop();
     await Promise.allSettled([...this.playbackJobs.values()]);
     clearInterval(this.timer);

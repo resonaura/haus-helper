@@ -78,3 +78,16 @@ test("HA credentials are absent from direct input and fallback keeps the authent
   assert.equal(fallback.token, "ha-secret");
   assert.ok(fallback.url.startsWith("http://ha.local/api/hls/"));
 });
+
+test("primary recovery discovery never starts HA media when direct telemetry is missing", () => {
+  const ha = new HaClient({ token: "ha-secret" });
+  ha.stream = () => {
+    throw Error("recovery must not warm HA streams");
+  };
+  assert.equal(ha.primaryRecordingInput(camera), undefined);
+  ha.inputRegistry = {
+    states: [state("garden_rtsp_stream", "unavailable")],
+    entities: [],
+  };
+  assert.equal(ha.primaryRecordingInput(camera), undefined);
+});

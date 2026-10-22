@@ -1,3 +1,10 @@
+# 0.3.13
+
+- Recognize advancing output timestamps when stream-copy FFmpeg omits its frame counter; repeated or invalid progress cannot hide a stall.
+- Recover a direct camera recording source after an add-on restart instead of staying indefinitely on HA fallback. Keep the fallback running while one bounded background probe verifies a decoded picture, with a five-minute retry cooldown.
+- Defer the handoff during active events, preserve pre-event ring files, cancel probes when a camera is disabled or the helper stops, and resume a verified primary without failure backoff. Never open a microphone or log source URLs.
+- Cover actual decoded media, stalled RTSP cancellation, concurrency/cooldown/privacy checks and a real recorder fallback-to-primary transition.
+
 # 0.3.12
 
 - Finish bounded NVR job registration before handling cancellation, so an accepted encoder is deleted even if its response arrives after playback is cancelled.
