@@ -3,7 +3,10 @@ import { recordingMetadata } from "./recording-metadata.mjs";
 import { stat } from "node:fs/promises";
 import { nodeAddress, nodeRequest, nodeJson } from "./node-client.mjs";
 import { fileDigest } from "./backups.mjs";
-import { prepareClusterPlayback } from "./cluster-playback.mjs";
+import {
+  prepareClusterPlayback,
+  playbackCandidates,
+} from "./cluster-playback.mjs";
 export class Cluster {
   constructor(store, backups) {
     this.store = store;
@@ -40,6 +43,16 @@ export class Cluster {
       .prepare("SELECT id,value FROM cluster_nodes")
       .all()
       .map((row) => ({ id: row.id, ...JSON.parse(row.value) }));
+  }
+  canPreparePlayback(event) {
+    return playbackCandidates(this).some((node) =>
+      this.store.db
+        .prepare(
+          `SELECT 1 FROM cluster_media m JOIN cluster_locations l
+        ON l.digest=m.digest WHERE m.event_id=? AND m.version=? AND l.node_id=? AND l.kind='media'`,
+        )
+        .get(event.id, event.playbackVersion, node.id),
+    );
   }
   preparePlayback(event, options) {
     return prepareClusterPlayback(this, event, options);

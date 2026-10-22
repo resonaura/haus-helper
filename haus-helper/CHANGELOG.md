@@ -1,3 +1,8 @@
+# 0.3.17
+
+- Preserve eight-second pre-event footage for Activity Assist even when inference/cluster delivery is delayed. Retain a bounded delay allowance in the ring, merge earlier assisted detections with hardware activity, and preserve the original event duration limit. Audio and originals remain intact.
+- Prepare a small recent recording working set on idle, capable NVR workers after replication, so first opens can reuse native-compatible video. Background work never starts a local HA encoder, respects worker pressure/quotas and yields admission to foreground playback/finalization.
+
 # 0.3.16
 
 - Honor physical-source availability throughout periodic heartbeats and state updates. An idle camera wrapper no longer overwrites its offline source or repeatedly restarts its recovery grace.

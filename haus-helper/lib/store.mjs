@@ -136,15 +136,18 @@ export class Store {
       );
     return this.get(id);
   }
-  extend(id, kind, at, endAt, sensorId) {
+  extend(id, kind, at, endAt, sensorId, maxEndAt = Infinity) {
     const old = this.get(id);
     if (!old || old.status !== "recording") return;
     const detections = [...old.detections, { kind, at, sensorId }].slice(-500);
     const kinds = [...new Set([...old.kinds, kind])];
     this.db
-      .prepare("UPDATE events SET end_at=?,kinds=?,detections=? WHERE id=?")
+      .prepare(
+        "UPDATE events SET start_at=?,end_at=?,kinds=?,detections=? WHERE id=?",
+      )
       .run(
-        Math.max(old.endAt, endAt),
+        Math.min(old.startAt, at),
+        Math.min(maxEndAt, Math.max(old.endAt, endAt)),
         JSON.stringify(kinds),
         JSON.stringify(detections),
         id,

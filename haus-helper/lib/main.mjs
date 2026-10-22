@@ -1,4 +1,5 @@
 import { CameraAvailability } from "./camera-availability.mjs";
+import { RecentPlayback } from "./recent-playback.mjs";
 import { WarmStreams } from "./warm-streams.mjs";
 import { Motion } from "./motion.mjs";
 import { SharedConfig } from "./shared-config.mjs";
@@ -41,6 +42,7 @@ const recorder = new Recorder(config, ha, store, undefined, {
   prepareRemote: (event, options) => cluster.preparePlayback(event, options),
 });
 const availability = new CameraAvailability();
+const recentPlayback = new RecentPlayback(store, recorder, cluster);
 const warm = new WarmStreams(ha, recorder, cluster);
 const motion = new Motion({ ha, recorder, cluster, warm, config });
 await motion.initialize();
@@ -176,7 +178,11 @@ const maintenance = setInterval(
   15000,
 );
 const distribution = setInterval(
-  () => void cluster.tick().catch(() => {}),
+  () =>
+    void (async () => {
+      await cluster.tick();
+      await recentPlayback.tick();
+    })().catch(() => {}),
   10000,
 );
 const warming = setInterval(() => void warm.tick().catch(() => {}), 4000);
