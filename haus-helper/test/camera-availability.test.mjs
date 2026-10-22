@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { CameraAvailability } from "../lib/camera-availability.mjs";
+import { discoverCameras } from "../lib/discovery.mjs";
 function fixture() {
   let at = 1000;
   const policy = new CameraAvailability({ now: () => at, wallNow: () => at });
@@ -95,4 +96,69 @@ test("a wall-clock correction cannot extend the monotonic outage deadline", () =
   buffer.lastAdvance = wall;
   policy.apply([camera], states, buffers);
   assert.equal(camera.available, false);
+});
+
+test("discovery and heartbeats never warm an offline physical source's idle wrapper", () => {
+  const states = [
+    {
+      entity_id: "camera.room",
+      state: "idle",
+      attributes: { friendly_name: "Room" },
+    },
+    {
+      entity_id: "camera.room_internal",
+      state: "unavailable",
+      attributes: { friendly_name: "Room Internal" },
+    },
+  ];
+  const entities = [{ entity_id: "camera.room", platform: "generic" }];
+  const overrides = { "camera.room": { enabled: true } };
+  let at = 0;
+  const policy = new CameraAvailability({ now: () => at, wallNow: () => at });
+  for (const sourceState of ["unavailable", "unknown", "off", undefined]) {
+    const current = sourceState
+      ? states.map((state, index) =>
+          index ? { ...state, state: sourceState } : state,
+        )
+      : states.slice(0, 1);
+    // A missing source still remains a known alias between registry refreshes.
+    const cameras = discoverCameras(states, entities, [], overrides);
+    for (let tick = 0; tick < 3; tick++) {
+      at += 60_000;
+      policy.apply(cameras, current, new Map());
+      assert.equal(cameras[0].available, false, String(sourceState));
+      assert.equal(cameras[0].enabled, true);
+    }
+  }
+  states[1].state = "streaming";
+  const recovered = discoverCameras(states, entities, [], overrides);
+  policy.apply(recovered, states, new Map());
+  assert.equal(recovered[0].available, true);
+});
+
+test("physical source outages share the bounded grace even if the wrapper stays idle", () => {
+  const f = fixture();
+  f.camera.aliases = ["camera.source"];
+  f.states.push({ entity_id: "camera.source", state: "streaming" });
+  f.apply();
+  f.states[1].state = "unavailable";
+  f.apply();
+  assert.equal(f.camera.available, true);
+  f.advance(29_999);
+  f.apply();
+  assert.equal(f.camera.available, true);
+  // Rediscovery and public wrapper updates must not restart the grace period.
+  const replacement = { ...f.camera, available: false };
+  f.advance(1);
+  f.policy.apply([replacement], f.states, f.buffers);
+  assert.equal(replacement.available, false);
+  f.advance(60_000);
+  f.apply();
+  assert.equal(f.camera.available, false);
+  f.states[1].state = "idle";
+  f.apply();
+  assert.equal(f.camera.available, true);
+  f.states[1].state = "off";
+  f.apply();
+  assert.equal(f.camera.available, false);
 });
