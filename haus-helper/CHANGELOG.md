@@ -1,3 +1,10 @@
+# 0.3.11
+
+- Negotiate short preparation-status polls with updated desktop clients. Long high-resolution conversions on weak Home Assistant hardware no longer depend on one ingress request staying open. Preserve synchronous preparation for older clients.
+- Coalesce processing, promote an actively selected clip, bound tracked work and briefly retain failures instead of restarting a failing encoder on every poll. Keep cached playback immediate and report preparation failures without media credentials.
+- Expose bounded queue counts, active work type and elapsed processing time in authenticated diagnostics to distinguish encoding from stalled or queued work.
+- Verify authenticated HTTP pending/completion behavior, backward compatibility, queue pressure, promotion and redacted retry failures.
+
 # 0.3.10
 
 - Keep packet-copied camera originals separate from normalized native playback. Some camera H264 streams decode in software but are rejected by strict hardware decoders; a successful remux does not prove playback compatibility.

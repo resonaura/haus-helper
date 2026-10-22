@@ -26,12 +26,14 @@ export class MediaQueue {
     const item = this.pending.shift();
     if (!item) return;
     this.active = true;
+    this.activeWork = { priority: item.priority, startedAt: Date.now() };
     try {
       item.resolve(await item.work());
     } catch (error) {
       item.reject(error);
     } finally {
       this.active = false;
+      this.activeWork = undefined;
       void this.next();
     }
   }
