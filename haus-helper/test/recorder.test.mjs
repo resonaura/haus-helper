@@ -40,6 +40,89 @@ async function fixture(t) {
   });
   return { root, media, dir, store, config, recorder };
 }
+test(
+  "a decoded primary returns after fallback without interrupting an active event or removing pre-roll",
+  { timeout: 30000 },
+  async (t) => {
+    const { root, dir, recorder, store } = await fixture(t);
+    const source = join(root, "primary.mp4");
+    await runMedia("ffmpeg", [
+      "-v",
+      "error",
+      "-y",
+      "-f",
+      "lavfi",
+      "-i",
+      "testsrc2=s=160x90:r=10",
+      "-t",
+      "2",
+      "-c:v",
+      "libx264",
+      "-threads",
+      "1",
+      source,
+    ]);
+    const choices = [];
+    recorder.ha.recordingInput = async (_camera, allowDirect) => {
+      choices.push(allowDirect);
+      return {
+        url: source,
+        kind: allowDirect ? "rtsp" : "ha",
+        inputArguments: ["-re", "-stream_loop", "-1"],
+      };
+    };
+    recorder.primaryRecovery.retryMs = 0;
+    recorder.ha.primaryRecordingInput = (camera) =>
+      recorder.ha.recordingInput(camera, true);
+    const buffer = {
+      id: "camera.test",
+      dir,
+      stopped: false,
+      directFailures: 3,
+      directAttempt: Date.now(),
+    };
+    recorder.buffers.set(buffer.id, buffer);
+    await recorder.startBuffer(buffer);
+    const deadline = performance.now() + 15000;
+    while (
+      buffer.status !== "buffering" ||
+      !(await recorder.segments(buffer)).length
+    ) {
+      assert.ok(
+        performance.now() < deadline,
+        "fallback must produce real pre-roll",
+      );
+      await pause(50);
+    }
+    const originalProcess = buffer.process,
+      parts = await recorder.segments(buffer);
+    const event = recorder.trigger(buffer.id);
+    await recorder.tick();
+    assert.equal(recorder.primaryRecovery.active.size, 0);
+    assert.equal(buffer.process, originalProcess);
+    assert.deepEqual(choices, [false]);
+    store.finish(event.id, {
+      status: "interrupted",
+      error: "fixture completed",
+    });
+    recorder.active.delete(buffer.id);
+    await recorder.tick();
+    const probe = recorder.primaryRecovery.active.get(buffer)?.pending;
+    assert.ok(probe, "quiet fallback schedules one primary check");
+    await probe;
+    while (buffer.inputKind !== "rtsp" || buffer.status !== "buffering") {
+      assert.ok(
+        performance.now() < deadline,
+        "decoded primary resumes without the failure backoff",
+      );
+      await pause(50);
+    }
+    assert.notEqual(buffer.process, originalProcess);
+    assert.deepEqual(choices, [false, true, true]);
+    for (const part of parts) assert.ok((await stat(part.path)).size > 0);
+  },
+);
+
 test("extends motion for a new object without losing previous labels and caps event duration", async (t) => {
   const { recorder, store } = await fixture(t);
   const first = recorder.trigger("camera.test", "motion", undefined, 1000);

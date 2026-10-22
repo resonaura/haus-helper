@@ -19,6 +19,7 @@ import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { runMedia, probe, sourceHasAudio } from "./media.mjs";
 import { inspectAudioAlignment } from "./playback-audio.mjs";
+import { PrimarySourceRecovery } from "./primary-source-recovery.mjs";
 export class Recorder {
   constructor(config, ha, store, onChange = () => {}, { prepareRemote } = {}) {
     this.config = config;
@@ -27,6 +28,7 @@ export class Recorder {
     this.onChange = onChange;
     this.prepareRemote = prepareRemote;
     this.remotePreparing = new Map();
+    this.primaryRecovery = new PrimarySourceRecovery();
     this.buffers = new Map();
     this.active = new Map();
     this.finalizing = new Set();
@@ -91,6 +93,7 @@ export class Recorder {
     for (const [id, buffer] of this.buffers) {
       if (!enabled.has(id)) {
         buffer.stopped = true;
+        this.primaryRecovery.cancel(buffer);
         buffer.probeAbort?.abort();
         this.terminateBuffer(buffer);
         clearTimeout(buffer.retry);
@@ -251,15 +254,22 @@ export class Recorder {
         if (input.kind === "rtsp")
           buffer.directFailures = (buffer.directFailures ?? 0) + 1;
         buffer.status = "reconnecting";
+        const primaryRecovered = buffer.primaryRecovered;
+        buffer.primaryRecovered = false;
         if (!buffer.stopped && !this.stopped)
           buffer.retry = setTimeout(
             () => void this.startBuffer(buffer),
-            Math.min(
-              30000,
-              2000 *
-                2 **
-                  Math.min((buffer.failures = (buffer.failures ?? 0) + 1), 4),
-            ),
+            primaryRecovered
+              ? 0
+              : Math.min(
+                  30000,
+                  2000 *
+                    2 **
+                      Math.min(
+                        (buffer.failures = (buffer.failures ?? 0) + 1),
+                        4,
+                      ),
+                ),
           );
       };
       child.once("error", exited);
@@ -376,6 +386,31 @@ export class Recorder {
         }
       }
       for (const buffer of this.buffers.values()) {
+        const camera = this.cameras?.find((item) => item.id === buffer.id);
+        if (this.ha.primaryRecordingInput)
+          this.primaryRecovery.consider(buffer, {
+            eligible: () =>
+              !this.stopped &&
+              !buffer.stopped &&
+              this.buffers.get(buffer.id) === buffer &&
+              buffer.inputKind === "ha" &&
+              buffer.status === "buffering" &&
+              !!buffer.process &&
+              !buffer.killTimer &&
+              camera?.enabled &&
+              camera.available &&
+              this.config.recording_enabled &&
+              !this.store
+                .recording()
+                .some((event) => event.cameraId === buffer.id),
+            find: () => this.ha.primaryRecordingInput(camera),
+            promote: () => {
+              buffer.directFailures = 0;
+              buffer.primaryRecovered = true;
+              buffer.status = "reconnecting";
+              this.terminateBuffer(buffer);
+            },
+          });
         const csv = buffer.listName
           ? await readFile(join(buffer.dir, buffer.listName), "utf8").catch(
               () => "",
@@ -713,6 +748,7 @@ export class Recorder {
   async stop() {
     this.stopped = true;
     this.playbackAbort.abort();
+    await this.primaryRecovery.stop();
     this.encoding.stop();
     await Promise.allSettled([...this.playbackJobs.values()]);
     clearInterval(this.timer);
