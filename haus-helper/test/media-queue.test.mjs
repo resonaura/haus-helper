@@ -18,6 +18,7 @@ test("one encoder at a time, foreground promotion, bounded backlog and stop reje
   );
   const speculative = queue.run(
     async () => {
+      assert.equal(queue.activeWork.priority, 20);
       order.push("speculative");
     },
     0,
@@ -31,8 +32,11 @@ test("one encoder at a time, foreground promotion, bounded backlog and stop reje
     "recorded",
   );
   queue.promote("next", 20);
+  assert.equal(queue.activeWork.priority, 0);
+  assert.ok(Date.now() - queue.activeWork.startedAt < 1000);
   release();
   await Promise.all([first, speculative, recorded]);
+  assert.equal(queue.activeWork, undefined);
   assert.deepEqual(order, ["first", "speculative", "recorded"]);
   const blocker = queue.run(
     () =>

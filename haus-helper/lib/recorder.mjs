@@ -590,6 +590,23 @@ export class Recorder {
       lastSegmentAt: buffer.lastSegmentAt,
     }));
   }
+  processingStatus() {
+    return {
+      active: this.encoding.active,
+      activeKind: this.encoding.activeWork
+        ? this.encoding.activeWork.priority >= 20
+          ? "playback"
+          : this.encoding.activeWork.priority >= 10
+            ? "capture"
+            : "prefetch"
+        : undefined,
+      elapsedMs: this.encoding.activeWork
+        ? Math.max(0, Date.now() - this.encoding.activeWork.startedAt)
+        : 0,
+      queued: this.encoding.pending.length,
+      preparing: this.playbackJobs.size,
+    };
+  }
   async preparePlayback(event, priority = 20) {
     if (event.playbackVersion === PLAYBACK_VERSION)
       return this.store.path(

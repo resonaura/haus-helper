@@ -61,6 +61,59 @@ test("requires authentication and never returns internal credentials in status",
     400,
   );
 });
+test("async preparation polls respond before encoding ends and coalesce repeated requests", async (t) => {
+  let complete;
+  const work = new Promise((resolve) => {
+    complete = resolve;
+  });
+  let calls = 0;
+  const { base, store, headers } = await fixture(t, {
+    preparePlayback: async (event) => {
+      calls++;
+      await work;
+      store.setPlayback(event.id, 100, 4, { duration: 2 });
+    },
+  });
+  t.after(() => complete());
+  const event = store.create("camera.test", "motion", 1000, 3000);
+  store.finish(event.id, { bytes: 10, duration: 2 });
+  const url = `${base}/api/events/${event.id}/prepare`;
+  const poll = () =>
+    fetch(url, {
+      headers: { ...headers, "X-Haus-Async-Prepare": "1" },
+      signal: AbortSignal.timeout(3000),
+    });
+  for (let i = 0; i < 3; i++) {
+    const response = await poll();
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      status: "preparing",
+      retryAfterMs: 1000,
+    });
+  }
+  assert.equal(calls, 1);
+  complete();
+  await work;
+  const response = await poll();
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).playbackVersion, 4);
+  assert.equal(calls, 1);
+});
+test("legacy preparation waits for completion without requiring the polling header", async (t) => {
+  let complete;
+  const work = new Promise((resolve) => {
+    complete = resolve;
+  });
+  const { base, store, headers } = await fixture(t, {
+    preparePlayback: () => work,
+  });
+  t.after(() => complete());
+  const event = store.create("camera.test", "motion", 1000, 3000);
+  store.finish(event.id, { bytes: 10, duration: 2 });
+  const pending = fetch(`${base}/api/events/${event.id}/prepare`, { headers });
+  complete();
+  assert.equal((await pending).status, 200);
+});
 test("streams authenticated seekable ranges with precise content lengths", async (t) => {
   const { base, store, headers } = await fixture(t);
   const event = store.create("camera.test", "motion", 1000, 3000);

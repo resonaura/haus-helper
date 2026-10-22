@@ -11,6 +11,7 @@ import { timingSafeEqual } from "node:crypto";
 import { pipeline } from "node:stream/promises";
 import { detectionKind } from "./discovery.mjs";
 import { parseRange } from "./media.mjs";
+import { PlaybackPreparation } from "./playback-preparation.mjs";
 const web = join(dirname(fileURLToPath(import.meta.url)), "../web");
 const publicCamera = (camera) => {
   if (!camera) return undefined;
@@ -65,6 +66,7 @@ export function createApi({
   motion,
 }) {
   const talkback = createTalkback({ config });
+  const preparation = new PlaybackPreparation(recorder);
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url, "http://haus.invalid");
@@ -234,6 +236,7 @@ export function createApi({
             retentionDays: config.retention_days,
           },
           buffers: recorder.status(),
+          processing: recorder.processingStatus?.(),
         });
       if (req.method === "GET" && path === "/api/cameras")
         return json(res, 200, {
@@ -462,6 +465,17 @@ export function createApi({
             source: (await cluster?.source(event)) ?? null,
           });
         if (["prepare", "prepare-next"].includes(eventMatch[2])) {
+          if (req.headers["x-haus-async-prepare"] === "1") {
+            const state = preparation.status(
+              event,
+              eventMatch[2] === "prepare-next" ? 0 : 20,
+            );
+            if (state === "preparing")
+              return json(res, 202, { status: state, retryAfterMs: 1000 });
+            if (state !== "ready")
+              return json(res, 503, { error: "preparation_failed" });
+            return json(res, 200, store.get(event.id));
+          }
           await recorder.preparePlayback(
             event,
             eventMatch[2] === "prepare-next" ? 0 : 20,
@@ -551,5 +565,6 @@ export function createApi({
   server.requestTimeout = 65000;
   server.headersTimeout = 10000;
   server.on("close", talkback.stopAll);
+  server.on("close", () => preparation.clear());
   return server;
 }
