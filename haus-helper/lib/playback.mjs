@@ -4,6 +4,7 @@ export const PLAYBACK_VERSION = 4;
 export function playbackArguments({
   copyVideo = false,
   audioTrimSeconds = 0,
+  videoDuration,
 } = {}) {
   const audioFilter =
     Number.isFinite(audioTrimSeconds) && audioTrimSeconds > 0
@@ -45,6 +46,9 @@ export function playbackArguments({
     "-af",
     audioFilter,
     "-shortest",
+    ...(Number.isFinite(videoDuration) && videoDuration > 0
+      ? ["-t", String(videoDuration)]
+      : []),
     "-movflags",
     "+faststart",
   ];

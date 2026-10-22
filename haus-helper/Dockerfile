@@ -6,6 +6,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 COPY lib ./lib
+RUN --mount=type=bind,source=test,target=/app/test,readonly node --test test/playback-audio.test.mjs
 COPY --from=vision /opt/vision-env /opt/vision-env
 COPY --from=vision /app/vision ./vision
 COPY web ./web

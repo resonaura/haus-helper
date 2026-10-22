@@ -672,6 +672,7 @@ export class Recorder {
                     // Only version 2 guarantees the earlier normalized video.
                     copyVideo: event.playbackVersion === 2,
                     audioTrimSeconds: alignment.audioTrimSeconds,
+                    videoDuration: alignment.videoDuration,
                   }),
                   temporary,
                 ],
