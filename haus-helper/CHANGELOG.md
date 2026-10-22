@@ -1,3 +1,7 @@
+# 0.3.18
+
+- Use the supplied Haus macOS artwork for the add-on icon, preserving its padding and shadow. Camera, recording, cluster and backup behavior is unchanged.
+
 # 0.3.17
 
 - Preserve eight-second pre-event footage for Activity Assist even when inference/cluster delivery is delayed. Retain a bounded delay allowance in the ring, merge earlier assisted detections with hardware activity, and preserve the original event duration limit. Audio and originals remain intact.
