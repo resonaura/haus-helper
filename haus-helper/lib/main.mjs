@@ -37,7 +37,9 @@ const cluster = new Cluster(store, backups);
 let registry = { states: [], entities: [], devices: [], cameras: [] };
 let refreshing;
 let dirty = false;
-const recorder = new Recorder(config, ha, store);
+const recorder = new Recorder(config, ha, store, undefined, {
+  prepareRemote: (event, options) => cluster.preparePlayback(event, options),
+});
 const availability = new CameraAvailability();
 const warm = new WarmStreams(ha, recorder, cluster);
 const motion = new Motion({ ha, recorder, cluster, warm, config });

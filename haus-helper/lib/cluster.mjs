@@ -3,6 +3,7 @@ import { recordingMetadata } from "./recording-metadata.mjs";
 import { stat } from "node:fs/promises";
 import { nodeAddress, nodeRequest, nodeJson } from "./node-client.mjs";
 import { fileDigest } from "./backups.mjs";
+import { prepareClusterPlayback } from "./cluster-playback.mjs";
 export class Cluster {
   constructor(store, backups) {
     this.store = store;
@@ -12,6 +13,7 @@ export class Cluster {
     this.stopped = false;
     this.abort = new AbortController();
     this.errors = new Map();
+    this.playbackNodes = new Set();
     store.db
       .exec(`CREATE TABLE IF NOT EXISTS cluster_nodes(id TEXT PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS cluster_locations(digest TEXT NOT NULL,node_id TEXT NOT NULL,kind TEXT NOT NULL,PRIMARY KEY(digest,node_id));
@@ -38,6 +40,9 @@ export class Cluster {
       .prepare("SELECT id,value FROM cluster_nodes")
       .all()
       .map((row) => ({ id: row.id, ...JSON.parse(row.value) }));
+  }
+  preparePlayback(event, options) {
+    return prepareClusterPlayback(this, event, options);
   }
   status() {
     const backups = this.backups.list();
