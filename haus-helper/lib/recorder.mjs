@@ -20,11 +20,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { runMedia, probe, sourceHasAudio } from "./media.mjs";
 import { inspectAudioAlignment } from "./playback-audio.mjs";
 export class Recorder {
-  constructor(config, ha, store, onChange = () => {}) {
+  constructor(config, ha, store, onChange = () => {}, { prepareRemote } = {}) {
     this.config = config;
     this.ha = ha;
     this.store = store;
     this.onChange = onChange;
+    this.prepareRemote = prepareRemote;
+    this.remotePreparing = new Map();
     this.buffers = new Map();
     this.active = new Map();
     this.finalizing = new Set();
@@ -591,18 +593,24 @@ export class Recorder {
     }));
   }
   processingStatus() {
+    const remoteAt = Math.min(...this.remotePreparing.values());
     return {
-      active: this.encoding.active,
+      active: this.encoding.active || this.remotePreparing.size > 0,
       activeKind: this.encoding.activeWork
         ? this.encoding.activeWork.priority >= 20
           ? "playback"
           : this.encoding.activeWork.priority >= 10
             ? "capture"
             : "prefetch"
-        : undefined,
+        : this.remotePreparing.size
+          ? "nvr-playback"
+          : undefined,
       elapsedMs: this.encoding.activeWork
         ? Math.max(0, Date.now() - this.encoding.activeWork.startedAt)
-        : 0,
+        : this.remotePreparing.size
+          ? Math.max(0, Date.now() - remoteAt)
+          : 0,
+      remote: this.remotePreparing.size,
       queued: this.encoding.pending.length,
       preparing: this.playbackJobs.size,
     };
@@ -631,34 +639,50 @@ export class Recorder {
           this.store.path(event.id),
           (event.endAt - (event.mediaStartAt ?? event.startAt)) / 1000,
         );
-        await this.encoding.run(
-          () =>
-            runMedia(
-              "ffmpeg",
-              [
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-nostdin",
-                "-y",
-                "-i",
-                this.store.path(event.id),
-                ...playbackArguments({
-                  // Version 3 also described unnormalized packet copies.
-                  // Only version 2 guarantees the earlier normalized video.
-                  copyVideo: event.playbackVersion === 2,
-                  audioTrimSeconds: alignment.audioTrimSeconds,
-                }),
-                temporary,
-              ],
-              {
-                timeout: Math.max(120000, event.duration * 2000),
-                signal: this.playbackAbort.signal,
-              },
-            ),
-          urgency.value,
-          event.id,
-        );
+        let remote = false;
+        if (event.playbackVersion !== 2 && this.prepareRemote) {
+          this.remotePreparing.set(event.id, Date.now());
+          try {
+            remote = await this.prepareRemote(event, {
+              output: temporary,
+              audioTrimSeconds: alignment.audioTrimSeconds,
+              signal: this.playbackAbort.signal,
+            });
+          } catch (error) {
+            if (this.playbackAbort.signal.aborted) throw error;
+          } finally {
+            this.remotePreparing.delete(event.id);
+          }
+        }
+        if (!remote)
+          await this.encoding.run(
+            () =>
+              runMedia(
+                "ffmpeg",
+                [
+                  "-hide_banner",
+                  "-loglevel",
+                  "error",
+                  "-nostdin",
+                  "-y",
+                  "-i",
+                  this.store.path(event.id),
+                  ...playbackArguments({
+                    // Version 3 also described unnormalized packet copies.
+                    // Only version 2 guarantees the earlier normalized video.
+                    copyVideo: event.playbackVersion === 2,
+                    audioTrimSeconds: alignment.audioTrimSeconds,
+                  }),
+                  temporary,
+                ],
+                {
+                  timeout: Math.max(120000, event.duration * 2000),
+                  signal: this.playbackAbort.signal,
+                },
+              ),
+            urgency.value,
+            event.id,
+          );
         const info = await probe(temporary);
         if (info.duration < 0.1) throw new Error("empty_video");
         await rename(temporary, output);

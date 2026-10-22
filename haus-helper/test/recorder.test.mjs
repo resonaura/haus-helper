@@ -8,6 +8,7 @@ import {
   stat,
   readFile,
   utimes,
+  copyFile,
 } from "node:fs/promises";
 import { createServer } from "node:http";
 import { createServer as createRtspServer } from "node:net";
@@ -572,11 +573,17 @@ test(
       playbackVersion: 3,
     });
     const legacy = store.get(event.id);
+    let remoteCalls = 0;
+    recorder.prepareRemote = async () => {
+      remoteCalls++;
+      throw new Error("node_unavailable");
+    };
     const paths = await Promise.all([
       recorder.preparePlayback(legacy),
       recorder.preparePlayback(legacy),
     ]);
     assert.equal(paths[0], paths[1]);
+    assert.equal(remoteCalls, 1);
     assert.notEqual(paths[0], store.path(event.id));
     assert.deepEqual(await readFile(store.path(event.id)), before);
     assert.ok(store.get(event.id).playbackBytes > 0);
@@ -629,3 +636,58 @@ test(
     assert.deepEqual(signals, ["SIGTERM", "SIGKILL"]);
   },
 );
+
+test("a successful optional worker copy becomes authoritative playback without starting a local encoder", async (t) => {
+  const { store, recorder } = await fixture(t);
+  const event = store.create("camera.test", "manual", 1000, 3000);
+  await runMedia("ffmpeg", [
+    "-hide_banner",
+    "-v",
+    "error",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc2=s=160x90:r=20",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440:sample_rate=16000",
+    "-t",
+    "2",
+    "-c:v",
+    "libx264",
+    "-threads",
+    "1",
+    "-pix_fmt",
+    "yuv420p",
+    "-c:a",
+    "aac",
+    store.path(event.id),
+  ]);
+  const original = await readFile(store.path(event.id));
+  store.finish(event.id, {
+    duration: 2,
+    bytes: original.length,
+    playbackVersion: 0,
+  });
+  let calls = 0;
+  recorder.prepareRemote = async (selected, options) => {
+    calls++;
+    assert.equal(selected.id, event.id);
+    assert.equal(options.signal.aborted, false);
+    assert.equal(recorder.processingStatus().remote, 1);
+    assert.equal(recorder.processingStatus().activeKind, "nvr-playback");
+    await copyFile(store.path(event.id), options.output);
+    return true;
+  };
+  recorder.encoding.run = async () => {
+    throw new Error("Local encoder must remain idle");
+  };
+  await recorder.preparePlayback(store.get(event.id));
+  assert.equal(calls, 1);
+  assert.equal(recorder.processingStatus().remote, 0);
+  assert.equal(store.get(event.id).playbackVersion, 4);
+  assert.equal(store.get(event.id).playbackInfo.audio, true);
+  assert.deepEqual(await readFile(store.path(event.id)), original);
+});
