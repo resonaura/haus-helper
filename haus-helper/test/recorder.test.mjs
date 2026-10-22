@@ -99,6 +99,11 @@ test(
     assert.equal(result.detections[0].at - result.mediaStartAt, 8000);
     assert.ok(result.duration >= 11.9);
     assert.ok(result.bytes > 1000);
+    assert.equal(
+      result.playbackVersion,
+      0,
+      "packet copies require a separately normalized native playback file",
+    );
     assert.ok((await stat(store.path(event.id, "jpg"))).size > 0);
     const hashes = async (path) => {
       const { stdout } = await runMedia("ffmpeg", [
@@ -559,7 +564,13 @@ test(
       store.path(event.id),
     ]);
     const before = await readFile(store.path(event.id));
-    store.finish(event.id, { duration: 2, bytes: before.length });
+    // Version 3 also marked unnormalized 0.3.9 H264 packet copies as native
+    // compatible. Do not trust that marker or overwrite the retained original.
+    store.finish(event.id, {
+      duration: 2,
+      bytes: before.length,
+      playbackVersion: 3,
+    });
     const legacy = store.get(event.id);
     const paths = await Promise.all([
       recorder.preparePlayback(legacy),

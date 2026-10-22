@@ -1,3 +1,9 @@
+# 0.3.10
+
+- Keep packet-copied camera originals separate from normalized native playback. Some camera H264 streams decode in software but are rejected by strict hardware decoders; a successful remux does not prove playback compatibility.
+- Normalize raw recordings on demand and cache a separate version-4 playback file. Recheck version-3 recordings, including copies created by 0.3.9, while preserving original media and audio.
+- Retain fast capture finalization and verify migration, original-byte preservation and full native playback of actual camera footage.
+
 # 0.3.9
 
 - Remux H264 recordings without re-encoding their pictures or forcing a different frame cadence. Keep audio normalization and seekable MP4 output while reducing finalization work on Home Assistant.
