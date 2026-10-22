@@ -72,7 +72,10 @@ test(
       return {
         url: source,
         kind: allowDirect ? "rtsp" : "ha",
-        inputArguments: ["-re"],
+        inputArguments: [
+          "-re",
+          ...(process.env.CI ? ["-loglevel", "debug"] : []),
+        ],
       };
     };
     recorder.primaryRecovery.retryMs = 0;
@@ -87,9 +90,13 @@ test(
     };
     recorder.buffers.set(buffer.id, buffer);
     await recorder.startBuffer(buffer);
-    let fixtureErrors = "";
+    let fixtureErrors = "",
+      fixtureProgress = "";
     buffer.process?.stderr.on("data", (chunk) => {
-      fixtureErrors = (fixtureErrors + chunk).slice(-2000);
+      fixtureErrors = (fixtureErrors + chunk).slice(-12000);
+    });
+    buffer.process?.stdout.on("data", (chunk) => {
+      fixtureProgress = (fixtureProgress + chunk).slice(-2000);
     });
     const deadline = performance.now() + 15000;
     while (
@@ -98,7 +105,7 @@ test(
     ) {
       assert.ok(
         performance.now() < deadline,
-        `fallback must produce real pre-roll (${buffer.status}): ${fixtureErrors}`,
+        `fallback must produce real pre-roll (${buffer.status}, ${buffer.lastError}): ${fixtureErrors}\n${fixtureProgress}`,
       );
       await pause(50);
     }
