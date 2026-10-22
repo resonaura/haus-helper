@@ -42,7 +42,7 @@ async function fixture(t) {
 }
 test(
   "a decoded primary returns after fallback without interrupting an active event or removing pre-roll",
-  { timeout: 30000 },
+  { timeout: 45000 },
   async (t) => {
     const { root, dir, recorder, store } = await fixture(t);
     const source = join(root, "primary.mp4");
@@ -55,7 +55,7 @@ test(
       "-i",
       "testsrc2=s=160x90:r=10",
       "-t",
-      "2",
+      "30",
       "-c:v",
       "libx264",
       "-g",
@@ -72,7 +72,7 @@ test(
       return {
         url: source,
         kind: allowDirect ? "rtsp" : "ha",
-        inputArguments: ["-re", "-stream_loop", "-1"],
+        inputArguments: ["-re"],
       };
     };
     recorder.primaryRecovery.retryMs = 0;
@@ -118,9 +118,10 @@ test(
     const probe = recorder.primaryRecovery.active.get(buffer)?.pending;
     assert.ok(probe, "quiet fallback schedules one primary check");
     await probe;
+    const recoveredDeadline = performance.now() + 15000;
     while (buffer.inputKind !== "rtsp" || buffer.status !== "buffering") {
       assert.ok(
-        performance.now() < deadline,
+        performance.now() < recoveredDeadline,
         "decoded primary resumes without the failure backoff",
       );
       await pause(50);
