@@ -9,17 +9,9 @@ import { nodeRequest, nodeJson } from "./node-client.mjs";
 import { probe } from "./media.mjs";
 import { resolve } from "node:path";
 
-/** Prepare only already replicated originals. The helper retains its authoritative copy. */
-export async function prepareClusterPlayback(
-  cluster,
-  event,
-  { output, audioTrimSeconds = 0, signal },
-) {
-  const abort = AbortSignal.any([
-    cluster.abort.signal,
-    ...(signal ? [signal] : []),
-  ]);
-  const eligible = cluster
+export function playbackCandidates(cluster) {
+  if (cluster.stopped) return [];
+  return cluster
     .nodes()
     .filter((node) => {
       const health = cluster.health.get(node.id),
@@ -42,6 +34,19 @@ export async function prepareClusterPlayback(
         cluster.health.get(a.id).remote.resources.cpu -
         cluster.health.get(b.id).remote.resources.cpu,
     );
+}
+
+/** Prepare only already replicated originals. The helper retains its authoritative copy. */
+export async function prepareClusterPlayback(
+  cluster,
+  event,
+  { output, audioTrimSeconds = 0, signal },
+) {
+  const abort = AbortSignal.any([
+    cluster.abort.signal,
+    ...(signal ? [signal] : []),
+  ]);
+  const eligible = playbackCandidates(cluster);
   if (!eligible.length || cluster.stopped) return false;
   const file = cluster.store.path(event.id);
   if (resolve(output) === resolve(file))

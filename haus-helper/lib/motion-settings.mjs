@@ -1,3 +1,6 @@
+// Includes inference and cluster polling; retain matching pre-event ring media.
+export const MAX_ASSIST_DELAY_MS = 30_000;
+
 export function motionSettings(value) {
   if (
     !value ||

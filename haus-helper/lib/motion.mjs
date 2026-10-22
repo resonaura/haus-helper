@@ -3,6 +3,7 @@ import { access } from "node:fs/promises";
 import { nodeJson, nodeRequest } from "./node-client.mjs";
 import { once } from "node:events";
 import { analysisCandidates } from "./motion-placement.mjs";
+import { MAX_ASSIST_DELAY_MS } from "./motion-settings.mjs";
 
 async function eachWorker(items, visit) {
   let next = 0;
@@ -138,7 +139,7 @@ export class Motion {
     if (
       !["motion", "person", "pet", "vehicle"].includes(event.kind) ||
       !Number.isFinite(event.at) ||
-      Math.abs(this.now() - event.at) > 30000
+      Math.abs(this.now() - event.at) > MAX_ASSIST_DELAY_MS
     )
       return;
     const job = this.jobs.get(camera.id);

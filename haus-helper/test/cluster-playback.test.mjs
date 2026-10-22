@@ -201,6 +201,24 @@ test("older nodes and nodes without the original replica leave local preparation
   assert.equal(old.calls.started + absent.calls.started, 0);
   await assert.rejects(() => access(f.output));
 });
+test("background admission requires a current replica on a capable idle worker", async (t) => {
+  const f = await fixture(t);
+  f.store.db
+    .prepare(
+      "INSERT INTO cluster_media(event_id,digest,bytes,version)VALUES(?,?,?,?)",
+    )
+    .run(f.event.id, digest(media), media.length, f.event.playbackVersion);
+  await f.add({ cpus: 0.75, memory: 512 * 1024 ** 2 });
+  await f.add({ replicated: false });
+  assert.equal(f.cluster.canPreparePlayback(f.event), false);
+  const strong = await f.add({});
+  assert.equal(f.cluster.canPreparePlayback(f.event), true);
+  f.cluster.playbackNodes.add(strong.node.id);
+  assert.equal(f.cluster.canPreparePlayback(f.event), false);
+  f.cluster.playbackNodes.clear();
+  f.cluster.health.get(strong.node.id).remote.resources.pressured = true;
+  assert.equal(f.cluster.canPreparePlayback(f.event), false);
+});
 test("checksum or container failures discard only generated output and release the worker", async (t) => {
   for (const invalidContainer of [false, true]) {
     const f = await fixture(t);

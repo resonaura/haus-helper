@@ -21,6 +21,7 @@ import { runMedia, probe, sourceHasAudio } from "./media.mjs";
 import { inspectAudioAlignment } from "./playback-audio.mjs";
 import { PrimarySourceRecovery } from "./primary-source-recovery.mjs";
 import { RecordingProgress } from "./recording-progress.mjs";
+import { MAX_ASSIST_DELAY_MS } from "./motion-settings.mjs";
 export class Recorder {
   constructor(config, ha, store, onChange = () => {}, { prepareRemote } = {}) {
     this.config = config;
@@ -294,6 +295,7 @@ export class Recorder {
         at,
         Math.min(endAt, current.startAt + this.config.max_event_seconds * 1000),
         sensorId,
+        Math.min(at, current.startAt) + this.config.max_event_seconds * 1000,
       );
       this.active.set(cameraId, event);
       this.onChange();
@@ -430,7 +432,9 @@ export class Recorder {
           .filter((event) => event.cameraId === buffer.id)
           .map((event) => event.startAt - this.config.pre_roll_seconds * 1000);
         const cutoff = Math.min(
-          now - (this.config.pre_roll_seconds + 12) * 1000,
+          now -
+            (this.config.pre_roll_seconds + 12) * 1000 -
+            (camera?.motionDetection?.enabled ? MAX_ASSIST_DELAY_MS : 0),
           ...pinned,
         );
         let total = 0;
@@ -643,7 +647,7 @@ export class Recorder {
       preparing: this.playbackJobs.size,
     };
   }
-  async preparePlayback(event, priority = 20) {
+  async preparePlayback(event, priority = 20, { remoteOnly = false } = {}) {
     if (event.playbackVersion === PLAYBACK_VERSION)
       return this.store.path(
         event.id,
@@ -651,12 +655,15 @@ export class Recorder {
       );
     if (this.playbackJobs.has(event.id)) {
       const existing = this.playbackPriorities.get(event.id);
-      if (existing) existing.value = Math.max(existing.value, priority);
+      if (existing) {
+        existing.value = Math.max(existing.value, priority);
+        existing.localAllowed ||= !remoteOnly;
+      }
       this.encoding.promote(event.id, priority);
       return this.playbackJobs.get(event.id);
     }
     if (this.playbackJobs.size >= 4) throw new Error("playback_queue_busy");
-    const urgency = { value: priority };
+    const urgency = { value: priority, localAllowed: !remoteOnly };
     this.playbackPriorities.set(event.id, urgency);
     const job = (async () => {
       const output = this.store.path(event.id, "playback.mp4");
@@ -682,6 +689,8 @@ export class Recorder {
             this.remotePreparing.delete(event.id);
           }
         }
+        if (!remote && !urgency.localAllowed)
+          throw new Error("background_worker_unavailable");
         if (!remote)
           await this.encoding.run(
             () =>

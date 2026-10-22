@@ -21,6 +21,7 @@ import { Store } from "../lib/store.mjs";
 import { Recorder, parseSegments } from "../lib/recorder.mjs";
 import { runMedia } from "../lib/media.mjs";
 import { defaults } from "../lib/config.mjs";
+import { Motion } from "../lib/motion.mjs";
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "haus-recorder-"));
   const media = join(root, "media");
@@ -295,6 +296,85 @@ test("non-H264 recording segments retain the compatible H264/AAC conversion", as
     "-",
   ]);
 });
+for (const placement of ["local", "nvr"])
+  test(
+    `delayed ${placement} Activity Assist preserves eight seconds before a hardware detection`,
+    { timeout: 30000 },
+    async (t) => {
+      const { dir, store, recorder } = await fixture(t);
+      const now = Date.now();
+      const detectedAt = now - 29000;
+      const mediaAt = detectedAt - 8000;
+      const prefix = `b${mediaAt}-a1b2c3d4`;
+      const name = `${prefix}-000000000.mp4`;
+      await runMedia("ffmpeg", [
+        "-v",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=s=160x90:r=10",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=400:sample_rate=16000",
+        "-t",
+        "12",
+        "-c:v",
+        "libx264",
+        "-threads",
+        "1",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        join(dir, name),
+      ]);
+      await utimes(
+        join(dir, name),
+        new Date(mediaAt + 12000),
+        new Date(mediaAt + 12000),
+      );
+      await writeFile(join(dir, `${prefix}.csv`), `${name},0,12\n`);
+      const expired = join(dir, `b${now - 100000}-b1b2c3d4-000000000.mp4`);
+      await writeFile(expired, "expired");
+      await utimes(expired, new Date(now - 100000), new Date(now - 100000));
+      const camera = recorder.cameras[0];
+      camera.motionDetection = { enabled: true, mode: "objects" };
+      recorder.buffers.set(camera.id, { id: camera.id, dir, stopped: true });
+      // A poll/prune occurs before an almost-30-second-old inference result arrives.
+      await recorder.tick();
+      assert.ok((await stat(join(dir, name))).size);
+      await assert.rejects(stat(expired), { code: "ENOENT" });
+      const hardware = recorder.trigger(
+        camera.id,
+        "motion",
+        "binary_sensor.motion",
+        detectedAt + 1000,
+      );
+      const motion = new Motion({ recorder, now: () => now });
+      const job =
+        placement === "local"
+          ? { local: true }
+          : { node: { id: "fixture-node" } };
+      motion.jobs.set(camera.id, job);
+      motion.deliver(camera, { kind: "person", at: detectedAt }, job);
+      const combined = store.get(hardware.id);
+      assert.equal(store.recording().length, 1);
+      assert.equal(combined.startAt, detectedAt);
+      assert.deepEqual(combined.kinds, ["motion", "person"]);
+      assert.equal(combined.detections[1].at, detectedAt);
+      await recorder.finish(combined);
+      const ready = store.get(hardware.id);
+      assert.equal(ready.status, "ready");
+      assert.equal(ready.mediaStartAt, mediaAt);
+      assert.equal(ready.startAt - ready.mediaStartAt, 8000);
+      assert.ok(ready.duration >= 11.9);
+      assert.equal(ready.playbackInfo.audio, true);
+    },
+  );
+
 test(
   "restart recovers a pending event from its persisted pre-event ring without blocking new ingest",
   { timeout: 30000 },
@@ -771,6 +851,15 @@ test("a successful optional worker copy becomes authoritative playback without s
     playbackVersion: 0,
   });
   let calls = 0;
+  recorder.prepareRemote = async () => false;
+  recorder.encoding.run = async () => {
+    throw new Error("Local encoder must remain idle");
+  };
+  await assert.rejects(
+    recorder.preparePlayback(store.get(event.id), -10, { remoteOnly: true }),
+    /background_worker_unavailable/,
+  );
+  assert.deepEqual(await readFile(store.path(event.id)), original);
   recorder.prepareRemote = async (selected, options) => {
     calls++;
     assert.equal(selected.id, event.id);
@@ -783,7 +872,9 @@ test("a successful optional worker copy becomes authoritative playback without s
   recorder.encoding.run = async () => {
     throw new Error("Local encoder must remain idle");
   };
-  await recorder.preparePlayback(store.get(event.id));
+  await recorder.preparePlayback(store.get(event.id), -10, {
+    remoteOnly: true,
+  });
   assert.equal(calls, 1);
   assert.equal(recorder.processingStatus().remote, 0);
   assert.equal(store.get(event.id).playbackVersion, 4);
