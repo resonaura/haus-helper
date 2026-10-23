@@ -10,9 +10,10 @@ import {
   playbackCandidates,
 } from "./cluster-playback.mjs";
 export class Cluster {
-  constructor(store, backups) {
+  constructor(store, backups, { now = Date.now } = {}) {
     this.store = store;
     this.backups = backups;
+    this.now = now;
     this.health = new Map();
     this.busy = false;
     this.stopped = false;
@@ -21,6 +22,7 @@ export class Cluster {
     this.playbackNodes = new Set();
     this.blobPins = new Map();
     this.blobDeletes = new Map();
+    this.healthRevision = 0;
     store.db
       .exec(`CREATE TABLE IF NOT EXISTS cluster_nodes(id TEXT PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS cluster_locations(digest TEXT NOT NULL,node_id TEXT NOT NULL,kind TEXT NOT NULL,PRIMARY KEY(digest,node_id));
@@ -144,6 +146,7 @@ export class Cluster {
       lastSeen: Date.now(),
       remote: status,
     });
+    this.invalidateHealth();
     this.backups.markChanged();
     return this.status();
   }
@@ -195,6 +198,7 @@ export class Cluster {
       }),
       id,
     );
+    this.invalidateHealth();
     this.backups.markChanged();
     return this.status();
   }
@@ -204,8 +208,48 @@ export class Cluster {
       .prepare("DELETE FROM cluster_locations WHERE node_id=?")
       .run(id);
     this.health.delete(id);
+    this.invalidateHealth();
     this.backups.markChanged();
     return this.status();
+  }
+  invalidateHealth() {
+    this.healthRevision += 1;
+    this.healthSampledAt = undefined;
+  }
+  /** Dashboard refreshes stay independent of slow archive work, without extra media polling. */
+  refreshHealth({ force = false } = {}) {
+    if (this.stopped) return Promise.resolve();
+    if (this.healthRefresh) {
+      if (!force || this.healthRefreshForced) return this.healthRefresh;
+      // A pre-copy dashboard request may already have sampled old storage.
+      // Queue exactly one fresh pass after it, instead of overlapping polls.
+      if (!this.forcedHealthRefresh)
+        this.forcedHealthRefresh = this.healthRefresh
+          .catch(() => {})
+          .then(() => this.refreshHealth({ force: true }))
+          .finally(() => {
+            this.forcedHealthRefresh = undefined;
+          });
+      return this.forcedHealthRefresh;
+    }
+    const at = this.now();
+    if (
+      !force &&
+      this.healthSampledAt !== undefined &&
+      at >= this.healthSampledAt &&
+      at - this.healthSampledAt < 5000
+    )
+      return Promise.resolve();
+    const revision = this.healthRevision;
+    this.healthRefreshForced = force;
+    this.healthRefresh = Promise.resolve()
+      .then(() => this.poll())
+      .finally(() => {
+        if (revision === this.healthRevision) this.healthSampledAt = this.now();
+        this.healthRefresh = undefined;
+        this.healthRefreshForced = false;
+      });
+    return this.healthRefresh;
   }
   async poll() {
     const nodes = this.nodes().filter((node) => node.enabled);
@@ -218,6 +262,11 @@ export class Cluster {
             signal: this.abort.signal,
             timeout: 5000,
           });
+          if (
+            this.stopped ||
+            !this.nodes().some((current) => current.id === node.id && current.enabled)
+          )
+            continue;
           if (remote.protocol !== 1 || typeof remote.instanceId !== "string")
             throw new Error();
           if (node.instanceId !== remote.instanceId) {
@@ -233,10 +282,15 @@ export class Cluster {
           }
           this.health.set(node.id, {
             online: true,
-            lastSeen: Date.now(),
+            lastSeen: this.now(),
             remote,
           });
         } catch {
+          if (
+            this.stopped ||
+            !this.nodes().some((current) => current.id === node.id && current.enabled)
+          )
+            continue;
           this.health.set(node.id, {
             ...this.health.get(node.id),
             online: false,
@@ -378,7 +432,7 @@ export class Cluster {
   async work() {
     this.busy = true;
     try {
-      await this.poll();
+      await this.refreshHealth();
       const peers = this.nodes().filter(
         (node) => node.enabled && this.health.get(node.id)?.online,
       );
@@ -449,9 +503,9 @@ export class Cluster {
           release();
         }
       }
-      await this.poll();
+      await this.refreshHealth({ force: true });
       await archivePending(this);
-      await this.poll();
+      await this.refreshHealth({ force: true });
       await this.recordingCache?.trim();
       await this.prune(peers);
     } finally {
@@ -609,6 +663,11 @@ export class Cluster {
   async stop() {
     this.stopped = true;
     this.abort.abort();
-    await Promise.allSettled([this.running, this.recordingCache?.running]);
+    await Promise.allSettled([
+      this.running,
+      this.healthRefresh,
+      this.forcedHealthRefresh,
+      this.recordingCache?.running,
+    ]);
   }
 }
