@@ -21,10 +21,10 @@ jobs:
           cache: npm
           cache-dependency-path: haus-helper/package-lock.json
       - name: Install media test dependencies
-        timeout-minutes: 8
+        timeout-minutes: 15
         run: |
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
-          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y ffmpeg
+          sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg
       - run: npm ci --ignore-scripts
         working-directory: haus-helper
       - run: npm test
