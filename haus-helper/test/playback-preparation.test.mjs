@@ -64,3 +64,49 @@ test("failed work is caught, redacted and held briefly rather than repeatedly re
   await pause(0);
   assert.equal(calls, 2);
 });
+
+test("explicit repair does not reuse the original ready marker and coalesces polling until a copy exists", async () => {
+  let finish, options;
+  const promise = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const prepare = new PlaybackPreparation({
+    preparePlayback: async (_event, _priority, input) => {
+      options = input;
+      await promise;
+    },
+  });
+  const event = { id: "source", playbackVersion: 4, playbackBytes: 0 };
+  assert.equal(prepare.status(event, 20), "ready");
+  assert.equal(
+    prepare.status(event, 20, { forceCompatibility: true }),
+    "preparing",
+  );
+  await pause(0);
+  assert.equal(options.forceCompatibility, true);
+  assert.equal(
+    prepare.status(event, 20),
+    "preparing",
+    "ordinary preparation joins an ongoing compatibility repair",
+  );
+  assert.equal(
+    prepare.status(event, 20, { forceCompatibility: true }),
+    "preparing",
+  );
+  finish();
+  await pause(0);
+  assert.equal(
+    prepare.status(
+      {
+        ...event,
+        playbackBytes: 100,
+        playbackInfo: { compatibilityRepaired: true },
+      },
+      20,
+      {
+        forceCompatibility: true,
+      },
+    ),
+    "ready",
+  );
+});

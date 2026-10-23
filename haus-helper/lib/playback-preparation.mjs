@@ -8,21 +8,31 @@ export class PlaybackPreparation {
     this.limit = limit;
     this.jobs = new Map();
   }
-  status(event, priority) {
-    if (event.playbackVersion === PLAYBACK_VERSION) {
-      this.jobs.delete(event.id);
+  status(event, priority, options = {}) {
+    const key = event.id + (options.forceCompatibility ? ":repair" : "");
+    const repair = this.jobs.get(event.id + ":repair");
+    if (!options.forceCompatibility && repair?.state === "preparing")
+      return "preparing";
+    if (
+      event.playbackVersion === PLAYBACK_VERSION &&
+      (!options.forceCompatibility ||
+        event.playbackInfo?.compatibilityRepaired === true)
+    ) {
+      this.jobs.delete(key);
       return "ready";
     }
-    let job = this.jobs.get(event.id);
+    let job = this.jobs.get(key);
     if (job?.state === "failed" && this.now() - job.finishedAt >= 5000) {
-      this.jobs.delete(event.id);
+      this.jobs.delete(key);
       job = undefined;
     }
     if (job) {
       if (job.state === "preparing" && priority > job.priority) {
         job.priority = priority;
         // Recorder coalesces this request and promotes its existing queue item.
-        void this.recorder.preparePlayback(event, priority).catch(() => {});
+        void this.recorder
+          .preparePlayback(event, priority, options)
+          .catch(() => {});
       }
       return job.state;
     }
@@ -32,9 +42,9 @@ export class PlaybackPreparation {
     }
     if (this.jobs.size >= this.limit) return "busy";
     job = { state: "preparing", priority };
-    this.jobs.set(event.id, job);
+    this.jobs.set(key, job);
     void Promise.resolve()
-      .then(() => this.recorder.preparePlayback(event, priority))
+      .then(() => this.recorder.preparePlayback(event, priority, options))
       .then(
         () => {
           job.state = "ready";

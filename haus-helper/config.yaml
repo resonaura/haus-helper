@@ -1,6 +1,6 @@
 name: Haus
 slug: haus-helper
-version: "0.3.18"
+version: "0.3.19"
 description: "Local camera event recording, a private timeline, and companion services for Haus."
 url: "https://github.com/resonaura/haus-helper"
 image: "ghcr.io/resonaura/haus-helper-{arch}"
@@ -21,7 +21,7 @@ panel_icon: mdi:home-outline
 panel_title: Haus
 homeassistant_api: true
 hassio_api: true
-hassio_role: backup
+hassio_role: manager
 panel_admin: false
 backup: hot
 backup_pre: "sh -c 'test ! -f /app/lib/backup-hook.mjs || node /app/lib/backup-hook.mjs pre'"
@@ -42,7 +42,7 @@ options:
   post_roll_seconds: 20
   max_event_seconds: 300
   retention_days: 7
-  max_storage_gb: 10
+  max_storage_gb: 0
   max_buffer_gb: 1
 schema:
   recording_enabled: bool
@@ -53,5 +53,5 @@ schema:
   post_roll_seconds: int(5,120)
   max_event_seconds: int(30,300)
   retention_days: int(1,90)
-  max_storage_gb: int(1,1000)
+  max_storage_gb: int(0,1000000)
   max_buffer_gb: int(1,10)

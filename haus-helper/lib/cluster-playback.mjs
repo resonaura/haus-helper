@@ -36,7 +36,7 @@ export function playbackCandidates(cluster) {
     );
 }
 
-/** Prepare only already replicated originals. The helper retains its authoritative copy. */
+/** Upload an original just in time when necessary; the helper remains authoritative. */
 export async function prepareClusterPlayback(
   cluster,
   event,
@@ -55,13 +55,17 @@ export async function prepareClusterPlayback(
   if (!sourceInfo.size || sourceInfo.size > 512 * 1024 ** 2) return false;
   const digest = await fileDigest(file);
   const candidates = eligible
-    .filter((node) =>
-      cluster.store.db
-        .prepare(
-          "SELECT 1 FROM cluster_locations WHERE node_id=? AND digest=? AND kind='media'",
-        )
-        .get(node.id, digest),
-    )
+    .sort((a, b) => {
+      const present = (node) =>
+        Boolean(
+          cluster.store.db
+            .prepare(
+              "SELECT 1 FROM cluster_locations WHERE node_id=? AND digest=? AND kind='media'",
+            )
+            .get(node.id, digest),
+        );
+      return Number(present(b)) - Number(present(a));
+    })
     .slice(0, 2);
   for (const node of candidates) {
     if (cluster.playbackNodes.has(node.id)) continue;
@@ -71,6 +75,33 @@ export async function prepareClusterPlayback(
       complete = false;
     try {
       abort.throwIfAborted();
+      const head = await nodeRequest(node, `/v1/blobs/${digest}`, {
+        method: "HEAD",
+        signal: abort,
+        timeout: 5000,
+      });
+      const exists = head.ok;
+      await head.body?.cancel();
+      if (!exists) {
+        const storage = cluster.health.get(node.id)?.remote?.storage;
+        const available =
+          storage?.availableBytes ??
+          storage?.maxBytes -
+            storage?.usedBytes -
+            (storage?.reservedBytes ?? 0);
+        if (Number.isFinite(available) && available < sourceInfo.size)
+          throw new Error("storage_full");
+        const uploaded = await nodeRequest(node, `/v1/blobs/${digest}`, {
+          method: "PUT",
+          file,
+          digest,
+          length: sourceInfo.size,
+          signal: abort,
+          timeout: 120000,
+        });
+        await uploaded.body?.cancel();
+        if (!uploaded.ok) throw new Error("source_upload_failed");
+      }
       const source = await nodeRequest(node, `/v1/blobs/${digest}`, {
         method: "HEAD",
         signal: abort,

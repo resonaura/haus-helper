@@ -44,15 +44,8 @@ export class Cluster {
       .all()
       .map((row) => ({ id: row.id, ...JSON.parse(row.value) }));
   }
-  canPreparePlayback(event) {
-    return playbackCandidates(this).some((node) =>
-      this.store.db
-        .prepare(
-          `SELECT 1 FROM cluster_media m JOIN cluster_locations l
-        ON l.digest=m.digest WHERE m.event_id=? AND m.version=? AND l.node_id=? AND l.kind='media'`,
-        )
-        .get(event.id, event.playbackVersion, node.id),
-    );
+  canPreparePlayback() {
+    return playbackCandidates(this).length > 0;
   }
   preparePlayback(event, options) {
     return prepareClusterPlayback(this, event, options);
@@ -128,13 +121,54 @@ export class Cluster {
     this.backups.markChanged();
     return this.status();
   }
-  update(id, patch) {
+  async update(id, patch) {
     const node = this.nodes().find((node) => node.id === id);
     if (!node) throw new Error("invalid_node");
-    if (typeof patch.enabled !== "boolean") throw new Error("invalid_node");
-    this.store.db
-      .prepare("UPDATE cluster_nodes SET value=? WHERE id=?")
-      .run(JSON.stringify({ ...node, enabled: patch.enabled }), id);
+    if (
+      !patch ||
+      typeof patch !== "object" ||
+      Array.isArray(patch) ||
+      !Object.keys(patch).length ||
+      Object.keys(patch).some(
+        (key) => !["enabled", "storageLimitBytes"].includes(key),
+      ) ||
+      (patch.enabled !== undefined && typeof patch.enabled !== "boolean") ||
+      (patch.storageLimitBytes !== undefined &&
+        patch.storageLimitBytes !== null &&
+        (!Number.isSafeInteger(patch.storageLimitBytes) ||
+          patch.storageLimitBytes < 1024 ** 2))
+    )
+      throw new Error("invalid_node");
+    if (Object.hasOwn(patch, "storageLimitBytes")) {
+      const settings = await nodeJson(node, "/v1/settings", {
+        method: "PATCH",
+        data: { storageLimitBytes: patch.storageLimitBytes },
+        signal: this.abort.signal,
+        timeout: 10000,
+      });
+      if (settings.storageLimitBytes !== patch.storageLimitBytes)
+        throw new Error("invalid_node_settings");
+      const health = this.health.get(id);
+      if (health?.remote)
+        this.health.set(id, {
+          ...health,
+          remote: {
+            ...health.remote,
+            settings,
+            storage: {
+              ...health.remote.storage,
+              storageLimitBytes: settings.storageLimitBytes,
+            },
+          },
+        });
+    }
+    this.store.db.prepare("UPDATE cluster_nodes SET value=? WHERE id=?").run(
+      JSON.stringify({
+        ...node,
+        ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+      }),
+      id,
+    );
     this.backups.markChanged();
     return this.status();
   }
@@ -222,10 +256,10 @@ export class Cluster {
         if (
           !location &&
           status?.storage &&
-          status.storage.maxBytes -
-            status.storage.usedBytes -
-            status.storage.reservedBytes <
-            bytes
+          (status.storage.availableBytes ??
+            status.storage.maxBytes -
+              status.storage.usedBytes -
+              status.storage.reservedBytes) < bytes
         )
           throw new Error("storage_full");
         const head = await nodeRequest(node, `/v1/blobs/${digest}`, {
