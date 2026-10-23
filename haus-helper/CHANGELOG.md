@@ -1,3 +1,7 @@
+# 0.3.22
+
+- Defer archive verification and remote playback reads on storage nodes that report resource pressure. Continue through another healthy, verified replica when available; keep local media untouched when every node is busy.
+
 # 0.3.21
 
 - Keep recent video in a configurable 10 GiB Home Assistant cache by default on new installations. Preserve existing saved budgets and explicit unlimited policies; NVR storage remains unlimited by default.

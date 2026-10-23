@@ -14,6 +14,7 @@ export function archiveNodes(cluster, now = Date.now()) {
       node.enabled &&
       node.roles.includes("storage") &&
       health?.online &&
+      health.remote?.resources?.pressured !== true &&
       now - health.lastSeen < 60000 &&
       health.remote?.storage?.verification?.supported === true
     );
