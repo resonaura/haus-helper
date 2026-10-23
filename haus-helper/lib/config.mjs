@@ -10,7 +10,7 @@ export const defaults = Object.freeze({
   post_roll_seconds: 20,
   max_event_seconds: 300,
   retention_days: 7,
-  max_storage_gb: 0,
+  max_storage_gb: 10,
   max_buffer_gb: 1,
 });
 export function validateOptions(input = {}) {

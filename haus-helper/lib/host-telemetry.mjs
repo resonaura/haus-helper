@@ -62,6 +62,7 @@ export class HostTelemetry {
   constructor(config, { fetcher = fetch, read = readFile } = {}) {
     Object.assign(this, { config, fetcher, read });
     this.appStats = new Map();
+    this.cpuSamples = new Map();
     this.appCursor = 0;
   }
   async supervisor(path) {
@@ -87,10 +88,36 @@ export class HostTelemetry {
     }
   }
   async stats(path) {
-    return (
+    const stats =
       (await this.supervisor(`${path}?one_shot=true`)) ??
-      (Date.now() < this.deadline ? await this.supervisor(path) : null)
-    );
+      (Date.now() < this.deadline ? await this.supervisor(path) : null);
+    if (!stats) return null;
+    // Supervisor one-shot samples expose cumulative counters but no measurement
+    // window. Calculate Docker's per-core percentage across our bounded polls.
+    const previous = this.cpuSamples.get(path);
+    const at = Date.now();
+    const usage = nullableNumber(stats.cpu_usage);
+    const system = nullableNumber(stats.cpu_system_usage);
+    const cores = nullableNumber(stats.online_cpus);
+    let percent = nullableNumber(stats.cpu_percent);
+    if (
+      percent === null &&
+      previous &&
+      at - previous.at <= 60000 &&
+      usage !== null &&
+      system !== null &&
+      cores > 0 &&
+      usage >= previous.usage &&
+      system > previous.system
+    )
+      percent = Math.min(
+        cores * 100,
+        ((usage - previous.usage) / (system - previous.system)) * cores * 100,
+      );
+    if (usage !== null && system !== null)
+      this.cpuSamples.set(path, { usage, system, at });
+    else this.cpuSamples.delete(path);
+    return { ...stats, cpu_percent: percent };
   }
   async collect(at) {
     this.deadline = Date.now() + 2500;
@@ -190,6 +217,9 @@ export class HostTelemetry {
           typeof app.slug === "string" && /^[a-zA-Z0-9_-]+$/.test(app.slug),
       );
     const current = new Set(list.map((app) => app.slug));
+    for (const path of this.cpuSamples.keys())
+      if (path !== "/core/stats" && !current.has(path.split("/")[2]))
+        this.cpuSamples.delete(path);
     for (const id of this.appStats.keys())
       if (!current.has(id)) this.appStats.delete(id);
     const cursor = this.appCursor % Math.max(1, list.length);

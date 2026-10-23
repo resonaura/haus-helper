@@ -1,3 +1,12 @@
+# 0.3.21
+
+- Keep recent video in a configurable 10 GiB Home Assistant cache by default on new installations. Preserve existing saved budgets and explicit unlimited policies; NVR storage remains unlimited by default.
+- Archive original footage and the current playable compatibility copy independently. Require actual SHA-256 verification by a healthy storage node before removing either local copy. Keep the catalog, thumbnails, backups and motion pre-roll; pause capture safely if no verified archive has capacity.
+- Read historical original and playback byte ranges from authenticated storage-only or streaming NVR nodes after local rotation. Report local, archived and missing media separately, and recover local-presence flags after an interrupted rotation or catalog restoration.
+- Protect playback, finalization, compatibility preparation and retention with leases. Revoke pending rotation when its policy changes, invalidate stale direct grants after repair, release reads on disconnect/shutdown, and advance bounded archive/cache scans past blocked old work.
+- Prepare retained historical footage even when its physical camera is temporarily offline, while respecting disabled cameras and avoiding work on evicted originals.
+- Derive Home Assistant Core/app CPU usage from cumulative counter deltas when Supervisor's one-shot CPU percentage is unavailable. Reset replaced or expired samples without presenting missing data as zero.
+
 # 0.3.20
 
 - Require validated capture provenance as well as indexed packet timing before opening a camera original directly. Preserve fast opens for the proven Eufy T8410C stream and trusted Haus encodes; Aqara and unknown bitstreams retain normalized playback. Revalidate the overly broad 0.3.19 original markers without discarding existing compatibility copies.

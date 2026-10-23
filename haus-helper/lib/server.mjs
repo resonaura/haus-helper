@@ -478,116 +478,199 @@ export function createApi({
         ((["GET", "HEAD"].includes(req.method) && eventMatch[2] !== "repair") ||
           (req.method === "POST" && eventMatch[2] === "repair"))
       ) {
-        const event = store.get(eventMatch[1]);
-        if (!event) return json(res, 404, { error: "event_not_found" });
-        if (!eventMatch[2]) return json(res, 200, event);
-        if (event.status !== "ready")
-          return json(res, 409, { error: "video_not_ready" });
-        if (eventMatch[2] === "source")
-          return json(res, 200, {
-            source: (await cluster?.source(event)) ?? null,
-          });
-        if (["prepare", "prepare-next", "repair"].includes(eventMatch[2])) {
-          if (eventMatch[2] === "repair") {
-            const body = await requestBody(req);
+        const requestAbort = new AbortController();
+        const signal = cluster?.abort?.signal
+          ? AbortSignal.any([requestAbort.signal, cluster.abort.signal])
+          : requestAbort.signal;
+        const closeRequest = () => requestAbort.abort();
+        const abortResponse = () => res.destroy();
+        res.once("close", closeRequest);
+        signal.addEventListener("abort", abortResponse, { once: true });
+        let releaseEvent;
+        try {
+          releaseEvent = await store.pinMedia(eventMatch[1], signal);
+          const event = store.get(eventMatch[1]);
+          if (!event) return json(res, 404, { error: "event_not_found" });
+          if (!eventMatch[2]) return json(res, 200, event);
+          if (event.status !== "ready")
+            return json(res, 409, { error: "video_not_ready" });
+          if (eventMatch[2] === "source")
+            return json(res, 200, {
+              source: (await cluster?.source(event)) ?? null,
+            });
+          if (["prepare", "prepare-next", "repair"].includes(eventMatch[2])) {
+            if (eventMatch[2] === "repair") {
+              const body = await requestBody(req);
+              if (
+                !body ||
+                typeof body !== "object" ||
+                Array.isArray(body) ||
+                Object.keys(body).length
+              )
+                throw new Error("invalid_repair_request");
+            }
+            const options = {
+              forceCompatibility:
+                eventMatch[2] === "repair" ||
+                req.headers["x-haus-compatibility-repair"] === "1",
+            };
             if (
-              !body ||
-              typeof body !== "object" ||
-              Array.isArray(body) ||
-              Object.keys(body).length
-            )
-              throw new Error("invalid_repair_request");
-          }
-          const options = {
-            forceCompatibility:
               eventMatch[2] === "repair" ||
-              req.headers["x-haus-compatibility-repair"] === "1",
-          };
-          if (
-            eventMatch[2] === "repair" ||
-            req.headers["x-haus-async-prepare"] === "1"
-          ) {
-            const state = preparation.status(
+              req.headers["x-haus-async-prepare"] === "1"
+            ) {
+              const state = preparation.status(
+                event,
+                eventMatch[2] === "prepare-next" ? 0 : 20,
+                options,
+              );
+              if (state === "preparing")
+                return json(res, 202, { status: state, retryAfterMs: 1000 });
+              if (state !== "ready")
+                return json(res, 503, { error: "preparation_failed" });
+              return json(res, 200, store.get(event.id));
+            }
+            await recorder.preparePlayback(
               event,
               eventMatch[2] === "prepare-next" ? 0 : 20,
               options,
             );
-            if (state === "preparing")
-              return json(res, 202, { status: state, retryAfterMs: 1000 });
-            if (state !== "ready")
-              return json(res, 503, { error: "preparation_failed" });
             return json(res, 200, store.get(event.id));
           }
-          await recorder.preparePlayback(
-            event,
-            eventMatch[2] === "prepare-next" ? 0 : 20,
-            options,
-          );
-          return json(res, 200, store.get(event.id));
-        }
-        const original = eventMatch[2] === "original";
-        const type = original || eventMatch[2] === "video" ? "mp4" : "jpg";
-        const file =
-          type === "mp4" && !original && recorder.preparePlayback
-            ? await recorder.preparePlayback(event)
-            : store.path(event.id, type);
-        if (type === "mp4" && !original && cluster && req.method === "GET") {
-          const abort = new AbortController();
-          res.once("close", () => abort.abort());
-          const remote = await cluster.media(
-            store.get(event.id),
-            req.headers.range,
-            abort.signal,
-          );
-          if (remote) {
-            const headers = {
-              "Content-Type": "video/mp4",
-              "X-Content-Type-Options": "nosniff",
-              "Cache-Control": "private, max-age=3600",
-            };
-            for (const key of [
-              "content-length",
-              "content-range",
-              "accept-ranges",
-            ])
-              if (remote.headers.get(key))
-                headers[key] = remote.headers.get(key);
-            res.writeHead(remote.status, headers);
-            await pipeline(remote.body, res).catch(() => {});
-            return;
+          const original = eventMatch[2] === "original";
+          const variant =
+            original || !event.playbackBytes ? "original" : "prepared";
+          const local =
+            variant === "original" ? event.localOriginal : event.localPlayback;
+          const knownArchive =
+            (original || eventMatch[2] === "video") &&
+            local &&
+            store.db
+              .prepare(
+                "SELECT 1 FROM event_archive a JOIN event_archive_locations l USING(event_id,variant,digest,version) WHERE a.event_id=? AND a.variant=? AND a.version=? LIMIT 1",
+              )
+              .get(
+                event.id,
+                variant,
+                variant === "prepared" ? event.playbackVersion : 0,
+              );
+          const missingLocal =
+            knownArchive &&
+            (await stat(
+              store.path(
+                event.id,
+                variant === "prepared" ? "playback.mp4" : "mp4",
+              ),
+            ).then(
+              () => false,
+              (error) => error.code === "ENOENT",
+            ));
+          if (missingLocal) store.setLocal(event.id, variant, false);
+          if (
+            (original || eventMatch[2] === "video") &&
+            (!local || missingLocal) &&
+            cluster?.archiveMedia
+          ) {
+            const archived = await cluster.archiveMedia(
+              event,
+              variant,
+              req.headers.range,
+              signal,
+              req.method,
+            );
+            if (!archived)
+              return json(res, 503, { error: "archived_media_unavailable" });
+            try {
+              const remote = archived.response;
+              const headers = {
+                "Content-Type": "video/mp4",
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "private, max-age=3600",
+              };
+              for (const key of [
+                "content-length",
+                "content-range",
+                "accept-ranges",
+              ])
+                if (remote.headers.get(key))
+                  headers[key] = remote.headers.get(key);
+              res.writeHead(remote.status, headers);
+              if (req.method === "HEAD") {
+                await remote.body?.cancel();
+                res.end();
+              } else {
+                res.flushHeaders();
+                await pipeline(remote.body, res).catch(() => {});
+              }
+              return;
+            } finally {
+              archived.release();
+            }
           }
+          const type = original || eventMatch[2] === "video" ? "mp4" : "jpg";
+          const file =
+            type === "mp4" && !original && recorder.preparePlayback
+              ? await recorder.preparePlayback(event)
+              : store.path(event.id, type);
+          if (type === "mp4" && !original && cluster && req.method === "GET") {
+            const remote = await cluster.media(
+              store.get(event.id),
+              req.headers.range,
+              signal,
+            );
+            if (remote) {
+              const headers = {
+                "Content-Type": "video/mp4",
+                "X-Content-Type-Options": "nosniff",
+                "Cache-Control": "private, max-age=3600",
+              };
+              for (const key of [
+                "content-length",
+                "content-range",
+                "accept-ranges",
+              ])
+                if (remote.headers.get(key))
+                  headers[key] = remote.headers.get(key);
+              res.writeHead(remote.status, headers);
+              await pipeline(remote.body, res).catch(() => {});
+              return;
+            }
+          }
+          let info;
+          try {
+            info = await stat(file);
+          } catch {
+            return json(res, 404, { error: "media_not_found" });
+          }
+          let range;
+          try {
+            range = parseRange(req.headers.range, info.size);
+          } catch {
+            return res
+              .writeHead(416, { "Content-Range": `bytes */${info.size}` })
+              .end();
+          }
+          const headers = {
+            "Content-Type": type === "mp4" ? "video/mp4" : "image/jpeg",
+            "Content-Length": range.end - range.start + 1,
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, max-age=3600",
+            "X-Content-Type-Options": "nosniff",
+          };
+          if (range.partial)
+            headers["Content-Range"] =
+              `bytes ${range.start}-${range.end}/${info.size}`;
+          res.writeHead(range.partial ? 206 : 200, headers);
+          if (req.method === "HEAD") return res.end();
+          await pipeline(
+            createReadStream(file, { start: range.start, end: range.end }),
+            res,
+          ).catch(() => {});
+          return;
+        } finally {
+          releaseEvent?.();
+          res.off("close", closeRequest);
+          signal.removeEventListener("abort", abortResponse);
         }
-        let info;
-        try {
-          info = await stat(file);
-        } catch {
-          return json(res, 404, { error: "media_not_found" });
-        }
-        let range;
-        try {
-          range = parseRange(req.headers.range, info.size);
-        } catch {
-          return res
-            .writeHead(416, { "Content-Range": `bytes */${info.size}` })
-            .end();
-        }
-        const headers = {
-          "Content-Type": type === "mp4" ? "video/mp4" : "image/jpeg",
-          "Content-Length": range.end - range.start + 1,
-          "Accept-Ranges": "bytes",
-          "Cache-Control": "private, max-age=3600",
-          "X-Content-Type-Options": "nosniff",
-        };
-        if (range.partial)
-          headers["Content-Range"] =
-            `bytes ${range.start}-${range.end}/${info.size}`;
-        res.writeHead(range.partial ? 206 : 200, headers);
-        if (req.method === "HEAD") return res.end();
-        await pipeline(
-          createReadStream(file, { start: range.start, end: range.end }),
-          res,
-        ).catch(() => {});
-        return;
       }
       json(res, 404, { error: "not_found" });
     } catch (error) {
@@ -596,6 +679,8 @@ export function createApi({
         return;
       }
       const message = String(error.message);
+      if (message === "archived_original_required_for_repair")
+        return json(res, 503, { error: message });
       if (message === "recording_storage_limit")
         return json(res, 409, { error: message });
       const client =

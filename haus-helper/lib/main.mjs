@@ -35,6 +35,7 @@ const backups = new Backups(config, store);
 await backups.initialize();
 const shared = new SharedConfig(store, () => backups.markChanged());
 const cluster = new Cluster(store, backups);
+cluster.enableRecordingCache(config);
 let registry = { states: [], entities: [], devices: [], cameras: [] };
 let refreshing;
 let dirty = false;
@@ -175,7 +176,11 @@ const retry = setInterval(() => {
   if (ha.connected) void refresh().catch(() => {});
 }, 60000);
 const retention = setInterval(
-  () => void store.prune(config).catch(() => {}),
+  () =>
+    void store
+      .prune(config)
+      .then(() => cluster.recordingCache.trim())
+      .catch(() => {}),
   60000,
 );
 const maintenance = setInterval(
@@ -202,6 +207,7 @@ const availabilityHeartbeat = setInterval(() => {
 }, 2000);
 let stopping = false;
 async function stop() {
+  clearInterval(retention);
   if (stopping) return;
   stopping = true;
   clearInterval(warming);
@@ -211,7 +217,6 @@ async function stop() {
   clearInterval(maintenance);
   clearInterval(distribution);
   await cluster.stop();
-  clearInterval(retention);
   clearInterval(availabilityHeartbeat);
   clearInterval(retry);
   ha.stop();

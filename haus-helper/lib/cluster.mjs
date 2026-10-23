@@ -1,3 +1,5 @@
+import { archivePending, archivedMedia } from "./recording-archive.mjs";
+import { RecordingCache } from "./recording-cache.mjs";
 import { randomUUID, createHash } from "node:crypto";
 import { recordingMetadata } from "./recording-metadata.mjs";
 import { stat } from "node:fs/promises";
@@ -247,6 +249,20 @@ export class Cluster {
     );
   }
   async replicate(file, digest, kind, nodes) {
+    const row =
+      kind === "media"
+        ? this.store.db
+            .prepare("SELECT event_id FROM cluster_media WHERE digest=?")
+            .get(digest)
+        : null;
+    const release = row ? await this.store.pinMedia(row.event_id) : () => {};
+    try {
+      return await this.replicatePinned(file, digest, kind, nodes);
+    } finally {
+      release();
+    }
+  }
+  async replicatePinned(file, digest, kind, nodes) {
     const info = await stat(file).catch(() => null);
     if (!info) return;
     const bytes = info.size;
@@ -385,49 +401,58 @@ export class Cluster {
             .all(...nodeIds, Math.min(2, nodeIds.length))
         : [];
       for (const { id } of events) {
-        const event = this.store.get(id);
-        const version = event.playbackVersion;
-        let media = this.store.db
-          .prepare("SELECT * FROM cluster_media WHERE event_id=?")
-          .get(id);
-        const file = this.store.path(
-          id,
-          event.playbackBytes ? "playback.mp4" : "mp4",
-        );
-        if (!media || media.version !== version) {
-          try {
-            media = {
-              digest: await fileDigest(file),
-              bytes: (await stat(file)).size,
-              version,
-            };
-            this.store.db
-              .prepare(
-                "INSERT OR REPLACE INTO cluster_media(event_id,digest,bytes,version)VALUES(?,?,?,?)",
-              )
-              .run(id, media.digest, media.bytes, version);
-          } catch {
-            continue;
+        const release = await this.store.pinMedia(id);
+        try {
+          const event = this.store.get(id);
+          const version = event.playbackVersion;
+          let media = this.store.db
+            .prepare("SELECT * FROM cluster_media WHERE event_id=?")
+            .get(id);
+          const file = this.store.path(
+            id,
+            event.playbackBytes ? "playback.mp4" : "mp4",
+          );
+          if (!media || media.version !== version) {
+            try {
+              media = {
+                digest: await fileDigest(file),
+                bytes: (await stat(file)).size,
+                version,
+              };
+              this.store.db
+                .prepare(
+                  "INSERT OR REPLACE INTO cluster_media(event_id,digest,bytes,version)VALUES(?,?,?,?)",
+                )
+                .run(id, media.digest, media.bytes, version);
+            } catch {
+              continue;
+            }
           }
+          const ranked = [...nodes].sort(
+            (a, b) =>
+              this.health.get(a.id)?.remote.storage.usedBytes /
+                Math.max(1, this.health.get(a.id)?.remote.storage.maxBytes) -
+              this.health.get(b.id)?.remote.storage.usedBytes /
+                Math.max(1, this.health.get(b.id)?.remote.storage.maxBytes),
+          );
+          const existing = new Set(
+            this.store.db
+              .prepare("SELECT node_id FROM cluster_locations WHERE digest=?")
+              .all(media.digest)
+              .map((row) => row.node_id),
+          );
+          ranked.sort(
+            (a, b) => Number(existing.has(b.id)) - Number(existing.has(a.id)),
+          );
+          await this.replicate(file, media.digest, "media", ranked.slice(0, 2));
+        } finally {
+          release();
         }
-        const ranked = [...nodes].sort(
-          (a, b) =>
-            this.health.get(a.id)?.remote.storage.usedBytes /
-              Math.max(1, this.health.get(a.id)?.remote.storage.maxBytes) -
-            this.health.get(b.id)?.remote.storage.usedBytes /
-              Math.max(1, this.health.get(b.id)?.remote.storage.maxBytes),
-        );
-        const existing = new Set(
-          this.store.db
-            .prepare("SELECT node_id FROM cluster_locations WHERE digest=?")
-            .all(media.digest)
-            .map((row) => row.node_id),
-        );
-        ranked.sort(
-          (a, b) => Number(existing.has(b.id)) - Number(existing.has(a.id)),
-        );
-        await this.replicate(file, media.digest, "media", ranked.slice(0, 2));
       }
+      await this.poll();
+      await archivePending(this);
+      await this.poll();
+      await this.recordingCache?.trim();
       await this.prune(peers);
     } finally {
       this.busy = false;
@@ -443,6 +468,12 @@ export class Cluster {
         .all()
         .map((row) => row.digest),
     );
+    for (const { digest } of this.store.db
+      .prepare(
+        "SELECT digest FROM event_archive WHERE event_id IN(SELECT id FROM events)",
+      )
+      .all())
+      media.add(digest);
     for (const node of nodes) {
       const rows = this.store.db
         .prepare("SELECT digest,kind FROM cluster_locations WHERE node_id=?")
@@ -483,8 +514,15 @@ export class Cluster {
       }
     }
     this.store.db.exec(
-      "DELETE FROM cluster_media WHERE event_id NOT IN(SELECT id FROM events)",
+      "DELETE FROM cluster_media WHERE event_id NOT IN(SELECT id FROM events); DELETE FROM event_archive WHERE event_id NOT IN(SELECT id FROM events); DELETE FROM event_archive_locations WHERE event_id NOT IN(SELECT id FROM events)",
     );
+  }
+  enableRecordingCache(config) {
+    this.recordingCache = new RecordingCache(config, this.store, this);
+    return this.recordingCache;
+  }
+  archiveMedia(event, variant, range, signal, method) {
+    return archivedMedia(this, event, variant, range, signal, method);
   }
   async source(event) {
     const media = this.store.db
@@ -571,6 +609,6 @@ export class Cluster {
   async stop() {
     this.stopped = true;
     this.abort.abort();
-    await this.running?.catch(() => {});
+    await Promise.allSettled([this.running, this.recordingCache?.running]);
   }
 }

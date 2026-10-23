@@ -131,6 +131,15 @@ export class Backups {
     store.db.exec(
       "CREATE TABLE IF NOT EXISTS haus_backups(digest TEXT PRIMARY KEY,kind TEXT NOT NULL,created_at INTEGER NOT NULL,bytes INTEGER NOT NULL,ha_slug TEXT); CREATE TABLE IF NOT EXISTS haus_backup_retries(kind TEXT PRIMARY KEY,next_at INTEGER NOT NULL,failures INTEGER NOT NULL)",
     );
+    if (
+      !store.db
+        .prepare("PRAGMA table_info(haus_backups)")
+        .all()
+        .some((column) => column.name === "archive_generation")
+    )
+      store.db.exec(
+        "ALTER TABLE haus_backups ADD COLUMN archive_generation INTEGER",
+      );
   }
   async initialize() {
     await mkdir(this.root, { recursive: true, mode: 0o700 });
@@ -153,7 +162,7 @@ export class Backups {
   list() {
     return this.store.db
       .prepare(
-        "SELECT digest,kind,created_at AS createdAt,bytes,ha_slug AS haSlug FROM haus_backups ORDER BY created_at DESC",
+        "SELECT digest,kind,created_at AS createdAt,bytes,ha_slug AS haSlug,archive_generation AS archiveGeneration FROM haus_backups ORDER BY created_at DESC",
       )
       .all()
       .map((item) => ({ ...item, available: !this.missing.has(item.digest) }));
@@ -185,6 +194,7 @@ export class Backups {
     const createdAt = Date.now();
     const dirtyAt = this.dirtyAt;
     let haSlug;
+    let archiveGeneration = null;
     try {
       directory = await mkdtemp(join(this.root, ".work-"));
       let source;
@@ -192,6 +202,7 @@ export class Backups {
         this.store.db
           .prepare("VACUUM INTO ?")
           .run(join(directory, "haus.sqlite"));
+        archiveGeneration = this.store.archiveGeneration();
         const options = await readFile(
           join(this.config.data, "options.json"),
           "utf8",
@@ -248,9 +259,16 @@ export class Backups {
       await rename(temporary, this.path(result.digest));
       this.store.db
         .prepare(
-          "INSERT INTO haus_backups(digest,kind,created_at,bytes,ha_slug)VALUES(?,?,?,?,?)",
+          "INSERT INTO haus_backups(digest,kind,created_at,bytes,ha_slug,archive_generation)VALUES(?,?,?,?,?,?)",
         )
-        .run(result.digest, kind, createdAt, result.size, haSlug ?? null);
+        .run(
+          result.digest,
+          kind,
+          createdAt,
+          result.size,
+          haSlug ?? null,
+          archiveGeneration,
+        );
       this.store.db
         .prepare("DELETE FROM haus_backup_retries WHERE kind=?")
         .run(kind);

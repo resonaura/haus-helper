@@ -94,7 +94,8 @@ export class Servers {
       this.telemetry.collect(at),
       this.filesystem(this.config.media ?? this.store.media).catch(() => null),
     ]);
-    const usedBytes = this.store.totals().bytes,
+    const totals = this.store.totals();
+    const usedBytes = totals.bytes,
       freeBytes = fs ? Number(fs.bavail) * Number(fs.bsize) : null;
     const reserveBytes = 256 * 1024 ** 2;
     const availableBytes =
@@ -121,6 +122,13 @@ export class Servers {
       settings: { ...this.policy },
       storage: {
         usedBytes,
+        localBytes: usedBytes,
+        archivedBytes: totals.archivedBytes,
+        unavailableBytes: totals.unavailableBytes,
+        totalRecordingBytes: totals.totalBytes,
+        localEvents: totals.localEvents,
+        archivedEvents: totals.archivedEvents,
+        cachePolicy: "verified-archive",
         reservedBytes: 0,
         reserveBytes,
         freeBytes,

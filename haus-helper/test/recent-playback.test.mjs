@@ -52,13 +52,7 @@ test("background admission yields to foreground work and never runs on unavailab
   await f.recent.tick();
   assert.equal(f.calls.length, 0);
   f.cluster.canPreparePlayback = () => true;
-  for (const reason of [
-    "foreground",
-    "finalizing",
-    "offline",
-    "disabled",
-    "stopped",
-  ]) {
+  for (const reason of ["foreground", "finalizing", "disabled", "stopped"]) {
     f.recorder.playbackJobs.clear();
     f.recorder.encoding.activeWork = null;
     f.recorder.stopped = false;
@@ -143,4 +137,25 @@ test("prepared recent rows do not bury old pending media or unsafe original mark
   });
   await recent.tick();
   assert.deepEqual(calls, [unsafe.id]);
+});
+
+test("an offline camera's retained local footage can prepare without waking its source; disabled cameras and archived originals stay untouched", async () => {
+  const f = fixture();
+  f.recorder.cameras.forEach((camera) => {
+    camera.available = false;
+  });
+  await f.recent.tick();
+  assert.equal(f.calls.length, 1);
+  const disabled = fixture();
+  disabled.recorder.cameras.forEach((camera) => {
+    camera.enabled = false;
+  });
+  await disabled.recent.tick();
+  assert.equal(disabled.calls.length, 0);
+  const archived = fixture();
+  archived.events.forEach((event) => {
+    event.localOriginal = false;
+  });
+  await archived.recent.tick();
+  assert.equal(archived.calls.length, 0);
 });
