@@ -18,7 +18,7 @@ export class RecentPlayback {
       return;
     const rows = this.store.db
       .prepare(
-        `SELECT id FROM events WHERE status='ready' AND
+        `SELECT id FROM events WHERE status='ready' AND local_original=1 AND
           (playback_version!=? OR (coalesce(playback_bytes,0)=0 AND
            json_extract(playback_info,'$.originalCompatible')=1 AND
            coalesce(json_extract(playback_info,'$.originalPolicyVersion'),0)!=?))
@@ -35,7 +35,7 @@ export class RecentPlayback {
       );
       if (
         !camera?.enabled ||
-        !camera.available ||
+        event.localOriginal === false ||
         playbackReady(event) ||
         this.now() - (this.attempts.get(id) ?? -Infinity) < 60_000 ||
         !this.cluster.canPreparePlayback(event)

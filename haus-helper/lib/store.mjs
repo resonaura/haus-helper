@@ -1,11 +1,13 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdir, unlink } from "node:fs/promises";
+import { mkdir, stat, unlink } from "node:fs/promises";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 export class Store {
   constructor(database, media) {
     this.db = new DatabaseSync(database);
     this.media = media;
+    this.mediaPins = new Map();
+    this.mediaEvictions = new Map();
     this.db.exec(`PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
     CREATE TABLE IF NOT EXISTS settings (id TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, camera_id TEXT NOT NULL, start_at INTEGER NOT NULL, end_at INTEGER NOT NULL, status TEXT NOT NULL, kinds TEXT NOT NULL, detections TEXT NOT NULL, duration REAL DEFAULT 0, bytes INTEGER DEFAULT 0, error TEXT);
@@ -30,7 +32,24 @@ export class Store {
       this.db.exec("ALTER TABLE events ADD COLUMN playback_info TEXT");
     if (!columns.includes("media_start_at"))
       this.db.exec("ALTER TABLE events ADD COLUMN media_start_at INTEGER");
-    this.db.exec("PRAGMA user_version=5");
+    if (!columns.includes("media_revision"))
+      this.db.exec(
+        "ALTER TABLE events ADD COLUMN media_revision INTEGER NOT NULL DEFAULT 0",
+      );
+    if (!columns.includes("local_original"))
+      this.db.exec(
+        "ALTER TABLE events ADD COLUMN local_original INTEGER NOT NULL DEFAULT 1",
+      );
+    if (!columns.includes("local_playback"))
+      this.db.exec(
+        "ALTER TABLE events ADD COLUMN local_playback INTEGER NOT NULL DEFAULT 1",
+      );
+    this.db
+      .exec(`CREATE TABLE IF NOT EXISTS event_archive(event_id TEXT NOT NULL,variant TEXT NOT NULL,digest TEXT NOT NULL,bytes INTEGER NOT NULL,version INTEGER NOT NULL,PRIMARY KEY(event_id,variant));
+      CREATE TABLE IF NOT EXISTS event_archive_locations(event_id TEXT NOT NULL,variant TEXT NOT NULL,node_id TEXT NOT NULL,digest TEXT NOT NULL,bytes INTEGER NOT NULL,version INTEGER NOT NULL,verified_at INTEGER NOT NULL,PRIMARY KEY(event_id,variant,node_id));
+      CREATE TABLE IF NOT EXISTS event_archive_state(id INTEGER PRIMARY KEY CHECK(id=1),generation INTEGER NOT NULL);
+      INSERT OR IGNORE INTO event_archive_state VALUES(1,0);
+      PRAGMA user_version=6`);
     this.db.exec("CREATE TABLE IF NOT EXISTS migrations (id TEXT PRIMARY KEY)");
     if (
       !this.db
@@ -173,9 +192,10 @@ export class Store {
       mediaStartAt = null,
     } = {},
   ) {
+    this.clearArchive(id);
     this.db
       .prepare(
-        "UPDATE events SET status=?,duration=?,bytes=?,error=?,playback_version=?,media_start_at=coalesce(?,media_start_at) WHERE id=?",
+        "UPDATE events SET status=?,duration=?,bytes=?,error=?,playback_version=?,media_start_at=coalesce(?,media_start_at),local_original=1,media_revision=media_revision+1 WHERE id=?",
       )
       .run(status, duration, bytes, error, playbackVersion, mediaStartAt, id);
     return this.get(id);
@@ -185,11 +205,43 @@ export class Store {
     return row && this.present(row);
   }
   setPlayback(id, bytes, version = 1, diagnostics = {}) {
+    this.clearArchive(id, "prepared");
     this.db
       .prepare(
-        "UPDATE events SET playback_version=?,playback_bytes=?,playback_info=? WHERE id=?",
+        "UPDATE events SET playback_version=?,playback_bytes=?,playback_info=?,local_playback=1,media_revision=media_revision+1 WHERE id=?",
       )
       .run(version, bytes, JSON.stringify(diagnostics), id);
+  }
+  clearArchive(id, variant) {
+    const where = variant ? " AND variant=?" : "";
+    const args = variant ? [id, variant] : [id];
+    const descriptors = this.db
+      .prepare(`DELETE FROM event_archive WHERE event_id=?${where}`)
+      .run(...args);
+    const locations = this.db
+      .prepare(`DELETE FROM event_archive_locations WHERE event_id=?${where}`)
+      .run(...args);
+    if (descriptors.changes || locations.changes) this.markArchiveChanged();
+    // A compatibility repair can replace prepared bytes without changing their
+    // policy version. Never issue a direct node grant for the previous digest.
+    if (
+      this.db
+        .prepare(
+          "SELECT 1 FROM sqlite_master WHERE type='table' AND name='cluster_media'",
+        )
+        .get()
+    )
+      this.db.prepare("DELETE FROM cluster_media WHERE event_id=?").run(id);
+  }
+  archiveGeneration() {
+    return this.db
+      .prepare("SELECT generation FROM event_archive_state WHERE id=1")
+      .get().generation;
+  }
+  markArchiveChanged() {
+    this.db.exec(
+      "UPDATE event_archive_state SET generation=generation+1 WHERE id=1",
+    );
   }
   present(row) {
     const playbackInfo = row.playback_info
@@ -217,6 +269,9 @@ export class Store {
       playbackVersion: row.playback_version,
       playbackBytes: row.playback_bytes,
       playbackInfo,
+      mediaRevision: row.media_revision,
+      localOriginal: Boolean(row.local_original),
+      localPlayback: Boolean(row.local_playback),
       videoUrl:
         row.status === "ready" ? `api/events/${row.id}/video` : undefined,
       thumbnailUrl:
@@ -299,10 +354,125 @@ export class Store {
   totals() {
     const row = this.db
       .prepare(
-        "SELECT count(*) AS count,coalesce(sum(bytes+playback_bytes),0) AS bytes FROM events WHERE status='ready'",
+        `WITH media AS (SELECT e.*,
+        EXISTS(SELECT 1 FROM event_archive a JOIN event_archive_locations l USING(event_id,variant,digest,version) WHERE a.event_id=e.id AND a.variant='original') AS original_archived,
+        EXISTS(SELECT 1 FROM event_archive a JOIN event_archive_locations l USING(event_id,variant,digest,version) WHERE a.event_id=e.id AND a.variant='prepared' AND a.version=e.playback_version) AS playback_archived
+        FROM events e WHERE status='ready')
+        SELECT count(*) AS count,coalesce(sum(bytes*local_original+playback_bytes*local_playback),0) AS bytes,
+        coalesce(sum(bytes+playback_bytes),0) AS totalBytes,
+        coalesce(sum(CASE WHEN local_original=0 AND original_archived THEN bytes ELSE 0 END +
+        CASE WHEN local_playback=0 AND playback_archived THEN playback_bytes ELSE 0 END),0) AS archivedBytes,
+        coalesce(sum(CASE WHEN local_original=1 OR (local_playback=1 AND playback_bytes>0) THEN 1 ELSE 0 END),0) AS localEvents,
+        coalesce(sum(CASE WHEN local_original=0 AND original_archived AND (playback_bytes=0 OR (local_playback=0 AND playback_archived)) THEN 1 ELSE 0 END),0) AS archivedEvents
+        FROM media`,
       )
       .get();
-    return { count: row.count, bytes: row.bytes };
+    return {
+      ...row,
+      unavailableBytes: Math.max(
+        0,
+        row.totalBytes - row.bytes - row.archivedBytes,
+      ),
+    };
+  }
+  async reconcileLocalMedia(probe = stat) {
+    // A crash after unlink, or a restored catalog without media, must not count
+    // absent files as local or prevent access to a verified remote archive.
+    let cursor = "";
+    while (true) {
+      const rows = this.db
+        .prepare(
+          "SELECT id,local_original,local_playback,playback_bytes FROM events WHERE status='ready' AND id>? AND (local_original=1 OR (local_playback=1 AND playback_bytes>0)) ORDER BY id LIMIT 128",
+        )
+        .all(cursor);
+      if (!rows.length) break;
+      cursor = rows.at(-1).id;
+      const probes = rows.flatMap((row) => [
+        ...(row.local_original
+          ? [{ id: row.id, variant: "original", extension: "mp4" }]
+          : []),
+        ...(row.local_playback && row.playback_bytes > 0
+          ? [{ id: row.id, variant: "prepared", extension: "playback.mp4" }]
+          : []),
+      ]);
+      let index = 0;
+      const missing = [];
+      await Promise.all(
+        Array.from({ length: Math.min(4, probes.length) }, async () => {
+          while (index < probes.length) {
+            const item = probes[index++];
+            try {
+              await probe(this.path(item.id, item.extension));
+            } catch (error) {
+              if (error.code === "ENOENT") missing.push(item);
+            }
+          }
+        }),
+      );
+      if (missing.length) {
+        this.db.exec("BEGIN IMMEDIATE");
+        try {
+          for (const item of missing)
+            this.setLocal(item.id, item.variant, false);
+          this.db.exec("COMMIT");
+        } catch (error) {
+          this.db.exec("ROLLBACK");
+          throw error;
+        }
+      }
+    }
+  }
+  /** Readers/writers pin a whole event; eviction and age retention take exclusivity. */
+  async pinMedia(id, signal) {
+    while (this.mediaEvictions.has(id)) {
+      signal?.throwIfAborted();
+      let onAbort;
+      try {
+        const done = this.mediaEvictions.get(id).done;
+        await (signal
+          ? Promise.race([
+              done,
+              new Promise((_, reject) => {
+                onAbort = () => reject(signal.reason);
+                signal.addEventListener("abort", onAbort, { once: true });
+              }),
+            ])
+          : done);
+      } finally {
+        if (onAbort) signal.removeEventListener("abort", onAbort);
+      }
+    }
+    signal?.throwIfAborted();
+    this.mediaPins.set(id, (this.mediaPins.get(id) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const count = (this.mediaPins.get(id) ?? 1) - 1;
+      if (count) this.mediaPins.set(id, count);
+      else this.mediaPins.delete(id);
+    };
+  }
+  evictMedia(id) {
+    if (this.mediaPins.has(id) || this.mediaEvictions.has(id)) return null;
+    let resolve;
+    const done = new Promise((complete) => {
+      resolve = complete;
+    });
+    this.mediaEvictions.set(id, { done });
+    return () => {
+      this.mediaEvictions.delete(id);
+      resolve();
+    };
+  }
+  setLocal(id, variant, present) {
+    if (!["original", "prepared"].includes(variant))
+      throw new Error("invalid_archive_variant");
+    this.db
+      .prepare(
+        `UPDATE events SET ${variant === "original" ? "local_original" : "local_playback"}=? WHERE id=?`,
+      )
+      .run(Number(present), id);
   }
   path(id, extension = "mp4") {
     if (
@@ -325,15 +495,20 @@ export class Store {
       .all();
     for (const row of rows) {
       if (row.start_at >= cutoff) continue;
+      const release = this.evictMedia(row.id);
+      if (!release) continue;
       try {
         for (const ext of ["mp4", "jpg", "playback.mp4"])
           await unlink(this.path(row.id, ext)).catch((error) => {
             if (error.code !== "ENOENT") throw error;
           });
+        this.clearArchive(row.id);
         this.db.prepare("DELETE FROM events WHERE id=?").run(row.id);
         removed++;
       } catch {
         /* Keep metadata and retry later if storage is temporarily unavailable. */
+      } finally {
+        release();
       }
     }
     return removed;

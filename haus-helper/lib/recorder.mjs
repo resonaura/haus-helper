@@ -47,6 +47,7 @@ export class Recorder {
     this.tickBusy = false;
   }
   async initialize() {
+    await this.store.reconcileLocalMedia();
     for (const event of this.store.recording()) {
       try {
         const info = await probe(this.store.path(event.id));
@@ -496,6 +497,14 @@ export class Recorder {
     }
   }
   async finish(event) {
+    const release = await this.store.pinMedia(event.id);
+    try {
+      return await this.finishPinned(event);
+    } finally {
+      release();
+    }
+  }
+  async finishPinned(event) {
     const buffer = this.buffers.get(event.cameraId) ?? {
       dir: join(
         this.config.data,
@@ -691,7 +700,19 @@ export class Recorder {
       preparing: this.playbackJobs.size,
     };
   }
-  async preparePlayback(
+  async preparePlayback(event, priority = 20, options = {}) {
+    const release = await this.store.pinMedia(event.id);
+    try {
+      return await this.preparePlaybackPinned(
+        this.store.get(event.id) ?? event,
+        priority,
+        options,
+      );
+    } finally {
+      release();
+    }
+  }
+  async preparePlaybackPinned(
     event,
     priority = 20,
     { remoteOnly = false, forceCompatibility = false } = {},
@@ -726,6 +747,8 @@ export class Recorder {
       const output = this.store.path(event.id, "playback.mp4");
       const temporary = output.replace(".mp4", ".partial.mp4");
       try {
+        const source = await stat(this.store.path(event.id)).catch(() => null);
+        if (!source) throw new Error("archived_original_required_for_repair");
         const diagnostics = await inspectCadence(this.store.path(event.id));
         const alignment = await inspectAudioAlignment(
           this.store.path(event.id),

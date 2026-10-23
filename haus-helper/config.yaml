@@ -1,6 +1,6 @@
 name: Haus
 slug: haus-helper
-version: "0.3.20"
+version: "0.3.21"
 description: "Local camera event recording, a private timeline, and companion services for Haus."
 url: "https://github.com/resonaura/haus-helper"
 image: "ghcr.io/resonaura/haus-helper-{arch}"
@@ -42,7 +42,7 @@ options:
   post_roll_seconds: 20
   max_event_seconds: 300
   retention_days: 7
-  max_storage_gb: 0
+  max_storage_gb: 10
   max_buffer_gb: 1
 schema:
   recording_enabled: bool
