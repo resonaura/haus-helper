@@ -238,3 +238,65 @@ test("custom microphone credentials never enter public camera responses", async 
     false,
   );
 });
+
+test("explicit recording repair is authenticated, coalesced across POST polls and returns a preserved-copy marker", async (t) => {
+  let complete,
+    calls = 0,
+    passedOptions;
+  const pending = new Promise((resolve) => {
+    complete = resolve;
+  });
+  const { base, store, headers } = await fixture(t, {
+    preparePlayback: async (event, _priority, options) => {
+      calls++;
+      passedOptions = options;
+      await pending;
+      store.setPlayback(event.id, 100, 4, {
+        compatibilityRepaired: true,
+        originalCompatible: false,
+      });
+    },
+  });
+  t.after(() => complete());
+  const event = store.create("camera.test", "motion", 1000, 3000);
+  store.finish(event.id, { bytes: 20, duration: 2, playbackVersion: 4 });
+  store.setPlayback(event.id, 0, 4, { originalCompatible: true });
+  const url = `${base}/api/events/${event.id}/repair`;
+  assert.equal((await fetch(url, { method: "POST", body: "{}" })).status, 401);
+  assert.equal(
+    (await fetch(url, { method: "POST", headers, body: "{}" })).status,
+    400,
+  );
+  const options = {
+    method: "POST",
+    headers: {
+      ...headers,
+      "Content-Type": "application/json",
+      "X-Haus-Client": "1",
+    },
+    body: "{}",
+  };
+  for (let i = 0; i < 3; i++) {
+    const response = await fetch(url, options);
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      status: "preparing",
+      retryAfterMs: 1000,
+    });
+  }
+  assert.equal(calls, 1);
+  assert.equal(passedOptions.forceCompatibility, true);
+  complete();
+  await pending;
+  const ready = await fetch(url, options);
+  assert.equal(ready.status, 200);
+  assert.equal((await ready.json()).playbackInfo.compatibilityRepaired, true);
+  assert.equal((await fetch(url, options)).status, 200);
+  assert.equal(calls, 1);
+  assert.equal(
+    (await fetch(url, { ...options, body: '{"path":"private"}' })).status,
+    400,
+  );
+  const status = await (await fetch(`${base}/api/status`, { headers })).json();
+  assert.equal(status.features.recordingRepair, true);
+});

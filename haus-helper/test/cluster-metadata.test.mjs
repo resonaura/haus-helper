@@ -160,3 +160,81 @@ test("failed metadata publication remains pending without losing or copying the 
   assert.equal(f.posted.length, 1);
   assert.equal(f.requests.filter((r) => r.method === "PUT").length, 0);
 });
+
+test("node storage policy updates are authenticated, preserve enabled state and only commit after remote acceptance", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "haus-node-settings-")),
+    media = join(root, "media");
+  await mkdir(media);
+  const store = new Store(join(root, "db.sqlite"), media);
+  let accepted = false,
+    received;
+  const remote = createServer(async (req, res) => {
+    let text = "";
+    for await (const chunk of req) text += chunk;
+    received = {
+      method: req.method,
+      path: req.url,
+      value: JSON.parse(text),
+      digest: req.headers["x-haus-digest"],
+      signature: req.headers["x-haus-signature"],
+    };
+    res
+      .writeHead(accepted ? 200 : 503, { "Content-Type": "application/json" })
+      .end(
+        JSON.stringify(
+          accepted
+            ? {
+                storageLimitBytes: received.value.storageLimitBytes,
+                source: "user",
+              }
+            : {},
+        ),
+      );
+  });
+  await new Promise((resolve) => remote.listen(0, "127.0.0.1", resolve));
+  let changed = 0;
+  const cluster = new Cluster(store, {
+    list: () => [],
+    markChanged: () => changed++,
+  });
+  const node = {
+    id: "fixture-policy",
+    name: "Home server",
+    enabled: true,
+    roles: ["storage", "stream"],
+    allowHttp: true,
+    url: `http://127.0.0.1:${remote.address().port}`,
+    key: "private-fixture-node-signing-key-123456789",
+  };
+  store.db
+    .prepare("INSERT INTO cluster_nodes(id,value)VALUES(?,?)")
+    .run(node.id, JSON.stringify(node));
+  t.after(async () => {
+    await cluster.stop();
+    remote.closeAllConnections();
+    await new Promise((resolve) => remote.close(resolve));
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  await assert.rejects(() =>
+    cluster.update(node.id, { enabled: false, storageLimitBytes: null }),
+  );
+  assert.equal(cluster.nodes()[0].enabled, true);
+  assert.equal(changed, 0);
+  accepted = true;
+  await cluster.update(node.id, { storageLimitBytes: null });
+  assert.equal(received.method, "PATCH");
+  assert.equal(received.path, "/v1/settings");
+  assert.deepEqual(received.value, { storageLimitBytes: null });
+  assert.match(received.digest, /^[a-f0-9]{64}$/);
+  assert.ok(received.signature);
+  assert.equal(cluster.nodes()[0].enabled, true);
+  assert.equal(changed, 1);
+  for (const patch of [
+    {},
+    { enabled: "false" },
+    { storageLimitBytes: -1 },
+    { url: "http://evil.invalid" },
+  ])
+    await assert.rejects(() => cluster.update(node.id, patch), /invalid_node/);
+});

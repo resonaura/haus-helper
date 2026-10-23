@@ -781,7 +781,10 @@ test(
       "null",
       "-",
     ]);
-    await store.prune({ retention_days: 7, max_storage_gb: 0 });
+    await store.prune(
+      { retention_days: 7, max_storage_gb: 0 },
+      Date.now() + 8 * 86400000,
+    );
     assert.equal(store.get(event.id), undefined);
     await assert.rejects(stat(paths[0]), { code: "ENOENT" });
   },
@@ -880,4 +883,92 @@ test("a successful optional worker copy becomes authoritative playback without s
   assert.equal(store.get(event.id).playbackVersion, 4);
   assert.equal(store.get(event.id).playbackInfo.audio, true);
   assert.deepEqual(await readFile(store.path(event.id)), original);
+});
+
+test("a reached storage budget pauses new events and lets an in-flight event finish", async (t) => {
+  const { recorder, store, config } = await fixture(t);
+  config.max_storage_gb = 1;
+  const current = recorder.trigger("camera.test", "motion");
+  const previous = store.create(
+    "camera.other",
+    "motion",
+    Date.now() - 10000,
+    Date.now() - 9000,
+  );
+  store.finish(previous.id, { bytes: 2 * 1024 ** 3, duration: 1 });
+  assert.equal(recorder.trigger("camera.test", "pet").id, current.id);
+  recorder.active.clear();
+  assert.throws(
+    () => recorder.trigger("camera.test"),
+    /recording_storage_limit/,
+  );
+  assert.equal(store.get(previous.id).bytes, 2 * 1024 ** 3);
+  config.max_storage_gb = 0;
+  assert.ok(recorder.trigger("camera.test").id);
+});
+
+test("verified originals bypass encoders and an explicit compatibility repair still preserves the source", async (t) => {
+  const { recorder, store } = await fixture(t);
+  const event = store.create(
+    "camera.test",
+    "motion",
+    Date.now() - 2000,
+    Date.now(),
+  );
+  const originalPath = store.path(event.id);
+  await runMedia("ffmpeg", [
+    "-v",
+    "error",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc2=size=160x90:rate=20",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440:sample_rate=48000",
+    "-t",
+    "2",
+    "-c:v",
+    "libx264",
+    "-pix_fmt",
+    "yuv420p",
+    "-g",
+    "20",
+    "-bf",
+    "0",
+    "-c:a",
+    "aac",
+    "-movflags",
+    "+faststart",
+    originalPath,
+  ]);
+  const before = await readFile(originalPath);
+  store.finish(event.id, { bytes: before.length, duration: 2 });
+  let remoteCalls = 0;
+  recorder.prepareRemote = async () => {
+    remoteCalls++;
+    return false;
+  };
+  assert.equal(
+    await recorder.preparePlayback(store.get(event.id)),
+    originalPath,
+  );
+  assert.equal(remoteCalls, 0);
+  assert.equal(store.get(event.id).playbackVersion, 4);
+  assert.equal(store.get(event.id).playbackBytes, 0);
+  assert.equal(store.get(event.id).playbackInfo.originalCompatible, true);
+  const repairing = recorder.preparePlayback(store.get(event.id), 20, {
+    forceCompatibility: true,
+  });
+  const [repaired, joined] = await Promise.all([
+    repairing,
+    recorder.preparePlayback(store.get(event.id)),
+  ]);
+  assert.equal(joined, repaired);
+  assert.notEqual(repaired, originalPath);
+  assert.equal(remoteCalls, 1);
+  assert.ok(store.get(event.id).playbackBytes > 0);
+  assert.equal(store.get(event.id).playbackInfo.originalCompatible, false);
+  assert.deepEqual(await readFile(originalPath), before);
 });

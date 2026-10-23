@@ -1,3 +1,4 @@
+import { Servers } from "./servers.mjs";
 import { rewritePlaylist } from "./warm-streams.mjs";
 import { motionSettings } from "./motion-settings.mjs";
 import { createTalkback, customTalkback } from "./talkback.mjs";
@@ -64,6 +65,9 @@ export function createApi({
   shared,
   warm,
   motion,
+  servers = store?.db
+    ? new Servers({ config, ha, store, cluster, backups })
+    : null,
 }) {
   const talkback = createTalkback({ config });
   const preparation = new PlaybackPreparation(recorder);
@@ -118,7 +122,7 @@ export function createApi({
       if (
         !config.standalone &&
         req.method !== "GET" &&
-        /^\/api\/(cluster|backups)(?:\/|$)/.test(path)
+        /^\/api\/(cluster|backups|servers)(?:\/|$)/.test(path)
       ) {
         const id = req.headers["x-remote-user-id"];
         let users;
@@ -170,6 +174,16 @@ export function createApi({
           return json(res, result.conflict ? 409 : 200, result);
         }
       }
+      if (servers && path === "/api/servers" && req.method === "GET")
+        return json(res, 200, await servers.status());
+      if (
+        servers &&
+        path === "/api/servers/home-assistant" &&
+        req.method === "PATCH"
+      ) {
+        servers.update(await requestBody(req));
+        return json(res, 200, await servers.status());
+      }
       if (cluster && path === "/api/cluster" && req.method === "GET")
         return json(res, 200, cluster.status());
       if (cluster && path === "/api/cluster/nodes" && req.method === "POST")
@@ -183,7 +197,7 @@ export function createApi({
           200,
           nodeMatch[2] && req.method === "POST"
             ? cluster.remove(nodeMatch[1])
-            : cluster.update(nodeMatch[1], input),
+            : await cluster.update(nodeMatch[1], input),
         );
       }
       if (backups && path === "/api/backups" && req.method === "GET")
@@ -227,12 +241,17 @@ export function createApi({
             previewPreheat: true,
             softwareMotion: !!motion,
             customTalkback: true,
+            recordingRepair: true,
+            verifiedOriginalPlayback: true,
           },
           connected: ha.connected,
           recordingEnabled: config.recording_enabled,
           storage: {
             ...store.totals(),
-            maxBytes: config.max_storage_gb * 1024 ** 3,
+            maxBytes:
+              config.max_storage_gb > 0
+                ? config.max_storage_gb * 1024 ** 3
+                : null,
             retentionDays: config.retention_days,
           },
           buffers: recorder.status(),
@@ -451,10 +470,14 @@ export function createApi({
         return;
       }
       const eventMatch =
-        /^\/api\/events\/([a-f0-9-]{36})(?:\/(video|thumbnail|prepare|prepare-next|source|original))?$/.exec(
+        /^\/api\/events\/([a-f0-9-]{36})(?:\/(video|thumbnail|prepare|prepare-next|source|original|repair))?$/.exec(
           path,
         );
-      if (eventMatch && ["GET", "HEAD"].includes(req.method)) {
+      if (
+        eventMatch &&
+        ((["GET", "HEAD"].includes(req.method) && eventMatch[2] !== "repair") ||
+          (req.method === "POST" && eventMatch[2] === "repair"))
+      ) {
         const event = store.get(eventMatch[1]);
         if (!event) return json(res, 404, { error: "event_not_found" });
         if (!eventMatch[2]) return json(res, 200, event);
@@ -464,11 +487,30 @@ export function createApi({
           return json(res, 200, {
             source: (await cluster?.source(event)) ?? null,
           });
-        if (["prepare", "prepare-next"].includes(eventMatch[2])) {
-          if (req.headers["x-haus-async-prepare"] === "1") {
+        if (["prepare", "prepare-next", "repair"].includes(eventMatch[2])) {
+          if (eventMatch[2] === "repair") {
+            const body = await requestBody(req);
+            if (
+              !body ||
+              typeof body !== "object" ||
+              Array.isArray(body) ||
+              Object.keys(body).length
+            )
+              throw new Error("invalid_repair_request");
+          }
+          const options = {
+            forceCompatibility:
+              eventMatch[2] === "repair" ||
+              req.headers["x-haus-compatibility-repair"] === "1",
+          };
+          if (
+            eventMatch[2] === "repair" ||
+            req.headers["x-haus-async-prepare"] === "1"
+          ) {
             const state = preparation.status(
               event,
               eventMatch[2] === "prepare-next" ? 0 : 20,
+              options,
             );
             if (state === "preparing")
               return json(res, 202, { status: state, retryAfterMs: 1000 });
@@ -479,6 +521,7 @@ export function createApi({
           await recorder.preparePlayback(
             event,
             eventMatch[2] === "prepare-next" ? 0 : 20,
+            options,
           );
           return json(res, 200, store.get(event.id));
         }
@@ -553,6 +596,8 @@ export function createApi({
         return;
       }
       const message = String(error.message);
+      if (message === "recording_storage_limit")
+        return json(res, 409, { error: message });
       const client =
         /^(invalid_|json_required|body_too_large|recording_disabled)/.test(
           message,

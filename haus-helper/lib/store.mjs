@@ -317,8 +317,6 @@ export class Store {
     this.db
       .prepare("DELETE FROM camera_availability WHERE end_at<?")
       .run(cutoff);
-    const max = options.max_storage_gb * 1024 ** 3;
-    let bytes = this.totals().bytes;
     let removed = 0;
     const rows = this.db
       .prepare(
@@ -326,14 +324,13 @@ export class Store {
       )
       .all();
     for (const row of rows) {
-      if (row.start_at >= cutoff && bytes <= max) continue;
+      if (row.start_at >= cutoff) continue;
       try {
         for (const ext of ["mp4", "jpg", "playback.mp4"])
           await unlink(this.path(row.id, ext)).catch((error) => {
             if (error.code !== "ENOENT") throw error;
           });
         this.db.prepare("DELETE FROM events WHERE id=?").run(row.id);
-        bytes -= row.bytes + row.playback_bytes;
         removed++;
       } catch {
         /* Keep metadata and retry later if storage is temporarily unavailable. */

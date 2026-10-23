@@ -1,3 +1,4 @@
+import { inspectOriginalPlayback } from "./playback-compatible.mjs";
 import { MediaQueue } from "./media-queue.mjs";
 import {
   PLAYBACK_VERSION,
@@ -301,6 +302,11 @@ export class Recorder {
       this.onChange();
       return event;
     }
+    if (
+      this.config.max_storage_gb > 0 &&
+      this.store.totals().bytes >= this.config.max_storage_gb * 1024 ** 3
+    )
+      throw new Error("recording_storage_limit");
     const event = this.store.create(cameraId, kind, at, endAt, sensorId);
     this.active.set(cameraId, event);
     this.onChange();
@@ -369,8 +375,13 @@ export class Recorder {
           continue;
         }
         if (held)
-          for (const sensor of activeSensors)
-            this.trigger(event.cameraId, sensor.kind, sensor.id, now);
+          for (const sensor of activeSensors) {
+            try {
+              this.trigger(event.cameraId, sensor.kind, sensor.id, now);
+            } catch {
+              /* A full budget pauses new events without disturbing capture cleanup. */
+            }
+          }
         if (now >= event.endAt + 8000) {
           this.finalizing.add(event.id);
           if (this.active.get(event.cameraId)?.id === event.id)
@@ -582,10 +593,25 @@ export class Recorder {
           { timeout: 20000, signal: this.playbackAbort.signal },
         ).catch(() => {});
         const file = await stat(output);
+        const alignment = packetCopy
+          ? await inspectAudioAlignment(
+              output,
+              (event.endAt - ready[0].start) / 1000,
+            )
+          : {};
+        const compatible =
+          !packetCopy ||
+          (await inspectOriginalPlayback(output, alignment).catch(() => false));
+        this.store.setPlayback(event.id, 0, compatible ? PLAYBACK_VERSION : 0, {
+          ...alignment,
+          audio: info.audio,
+          sourceAudioMissing: this.config.record_audio && !info.audio,
+          ...(compatible && packetCopy ? { originalCompatible: true } : {}),
+        });
         this.store.finish(event.id, {
           duration: info.duration,
           bytes: file.size,
-          playbackVersion: packetCopy ? 0 : PLAYBACK_VERSION,
+          playbackVersion: compatible ? PLAYBACK_VERSION : 0,
           // The event starts at detection; the file starts in the pre-event ring.
           // Persist the actual boundary, including a keyframe-aligned extra segment.
           mediaStartAt: Math.round(ready[0].start),
@@ -594,10 +620,12 @@ export class Recorder {
               ? "Partial recording: the camera stream stopped"
               : null,
         });
-        this.store.setPlayback(event.id, 0, packetCopy ? 0 : PLAYBACK_VERSION, {
-          audio: info.audio,
-          sourceAudioMissing: this.config.record_audio && !info.audio,
-        });
+        // Start before periodic replication. The remote worker can upload the
+        // authoritative original just in time; this never blocks fresh capture.
+        if (!compatible && !this.stopped)
+          void this.preparePlayback(this.store.get(event.id), 5, {
+            remoteOnly: true,
+          }).catch(() => {});
       } finally {
         await unlink(manifest).catch(() => {});
         await unlink(temporary).catch(() => {});
@@ -647,23 +675,36 @@ export class Recorder {
       preparing: this.playbackJobs.size,
     };
   }
-  async preparePlayback(event, priority = 20, { remoteOnly = false } = {}) {
-    if (event.playbackVersion === PLAYBACK_VERSION)
-      return this.store.path(
-        event.id,
-        event.playbackBytes ? "playback.mp4" : "mp4",
-      );
+  async preparePlayback(
+    event,
+    priority = 20,
+    { remoteOnly = false, forceCompatibility = false } = {},
+  ) {
     if (this.playbackJobs.has(event.id)) {
       const existing = this.playbackPriorities.get(event.id);
       if (existing) {
         existing.value = Math.max(existing.value, priority);
         existing.localAllowed ||= !remoteOnly;
+        existing.forceCompatibility ||= forceCompatibility;
       }
       this.encoding.promote(event.id, priority);
       return this.playbackJobs.get(event.id);
     }
+    if (
+      event.playbackVersion === PLAYBACK_VERSION &&
+      (!forceCompatibility ||
+        event.playbackInfo?.compatibilityRepaired === true)
+    )
+      return this.store.path(
+        event.id,
+        event.playbackBytes ? "playback.mp4" : "mp4",
+      );
     if (this.playbackJobs.size >= 4) throw new Error("playback_queue_busy");
-    const urgency = { value: priority, localAllowed: !remoteOnly };
+    const urgency = {
+      value: priority,
+      localAllowed: !remoteOnly,
+      forceCompatibility,
+    };
     this.playbackPriorities.set(event.id, urgency);
     const job = (async () => {
       const output = this.store.path(event.id, "playback.mp4");
@@ -674,6 +715,21 @@ export class Recorder {
           this.store.path(event.id),
           (event.endAt - (event.mediaStartAt ?? event.startAt)) / 1000,
         );
+        const originalCompatible =
+          !urgency.forceCompatibility &&
+          (await inspectOriginalPlayback(
+            this.store.path(event.id),
+            alignment,
+          ).catch(() => false));
+        if (originalCompatible && !urgency.forceCompatibility) {
+          this.store.setPlayback(event.id, 0, PLAYBACK_VERSION, {
+            ...event.playbackInfo,
+            ...diagnostics,
+            ...alignment,
+            originalCompatible: true,
+          });
+          return this.store.path(event.id);
+        }
         let remote = false;
         if (event.playbackVersion !== 2 && this.prepareRemote) {
           this.remotePreparing.set(event.id, Date.now());
@@ -732,6 +788,8 @@ export class Recorder {
             ...event.playbackInfo,
             ...diagnostics,
             ...alignment,
+            originalCompatible: false,
+            compatibilityRepaired: urgency.forceCompatibility,
             duration: info.duration,
             audio: info.audio,
             sourceAudioMissing: this.config.record_audio && !info.audio,

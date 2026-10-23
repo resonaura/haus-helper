@@ -80,8 +80,13 @@ const apply = () => {
   if (config.recording_enabled)
     for (const camera of registry.cameras) {
       if (camera.available && camera.enabled && !recorder.active.has(camera.id))
-        for (const sensor of camera.sensors.filter((item) => item.active))
-          recorder.trigger(camera.id, sensor.kind, sensor.id);
+        for (const sensor of camera.sensors.filter((item) => item.active)) {
+          try {
+            recorder.trigger(camera.id, sensor.kind, sensor.id);
+          } catch {
+            /* Recording budgets can pause new events without blocking discovery. */
+          }
+        }
     }
 };
 const refresh = async () => {

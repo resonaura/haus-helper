@@ -87,9 +87,11 @@ async function fixture(t) {
     onStart = () => {},
     alwaysPending = false,
     registrationDelay = 0,
+    uploadSupported = true,
   } = {}) => {
     const authenticate = authenticator(key),
-      calls = { started: 0, deleted: 0, polls: 0 };
+      calls = { started: 0, deleted: 0, polls: 0, uploaded: 0 };
+    let sourcePresent = replicated;
     const job = randomUUID();
     const json = (res, code, value) =>
       res
@@ -98,7 +100,24 @@ async function fixture(t) {
     const server = createServer(async (req, res) => {
       if (!authenticate(req)) return json(res, 401, {});
       if (req.method === "HEAD" && req.url === `/v1/blobs/${digest(media)}`)
-        return res.writeHead(200, { "Content-Length": media.length }).end();
+        return res
+          .writeHead(sourcePresent ? 200 : 404, {
+            "Content-Length": sourcePresent ? media.length : 0,
+          })
+          .end();
+      if (
+        req.method === "PUT" &&
+        req.url === `/v1/blobs/${digest(media)}` &&
+        uploadSupported
+      ) {
+        const chunks = [];
+        for await (const chunk of req) chunks.push(chunk);
+        assert.deepEqual(Buffer.concat(chunks), media);
+        assert.equal(req.headers["x-haus-digest"], digest(media));
+        calls.uploaded++;
+        sourcePresent = true;
+        return json(res, 201, {});
+      }
       if (req.method === "POST" && req.url === "/v1/playback") {
         const chunks = [];
         for await (const chunk of req) chunks.push(chunk);
@@ -190,10 +209,10 @@ test("selects a lightly loaded capable replica, verifies media, cleans remote wo
   assert.deepEqual(await readFile(f.store.path(f.event.id)), media);
   assert.equal(f.cluster.playbackNodes.size, 0);
 });
-test("older nodes and nodes without the original replica leave local preparation available", async (t) => {
+test("older nodes or failed just-in-time uploads leave local preparation available", async (t) => {
   const f = await fixture(t);
   const old = await f.add({ supported: false });
-  const absent = await f.add({ replicated: false });
+  const absent = await f.add({ replicated: false, uploadSupported: false });
   assert.equal(
     await f.cluster.preparePlayback(f.event, { output: f.output }),
     false,
@@ -201,23 +220,27 @@ test("older nodes and nodes without the original replica leave local preparation
   assert.equal(old.calls.started + absent.calls.started, 0);
   await assert.rejects(() => access(f.output));
 });
-test("background admission requires a current replica on a capable idle worker", async (t) => {
+test("background admission allows a capable idle worker before periodic replication", async (t) => {
   const f = await fixture(t);
-  f.store.db
-    .prepare(
-      "INSERT INTO cluster_media(event_id,digest,bytes,version)VALUES(?,?,?,?)",
-    )
-    .run(f.event.id, digest(media), media.length, f.event.playbackVersion);
   await f.add({ cpus: 0.75, memory: 512 * 1024 ** 2 });
-  await f.add({ replicated: false });
-  assert.equal(f.cluster.canPreparePlayback(f.event), false);
-  const strong = await f.add({});
+  const strong = await f.add({ replicated: false });
   assert.equal(f.cluster.canPreparePlayback(f.event), true);
   f.cluster.playbackNodes.add(strong.node.id);
   assert.equal(f.cluster.canPreparePlayback(f.event), false);
   f.cluster.playbackNodes.clear();
   f.cluster.health.get(strong.node.id).remote.resources.pressured = true;
   assert.equal(f.cluster.canPreparePlayback(f.event), false);
+});
+test("uploads a missing original on demand and returns verified playable media", async (t) => {
+  const f = await fixture(t),
+    node = await f.add({ replicated: false });
+  assert.equal(
+    await f.cluster.preparePlayback(f.event, { output: f.output }),
+    true,
+  );
+  assert.equal(node.calls.uploaded, 1);
+  assert.equal(node.calls.started, 1);
+  assert.deepEqual(await readFile(f.store.path(f.event.id)), media);
 });
 test("checksum or container failures discard only generated output and release the worker", async (t) => {
   for (const invalidContainer of [false, true]) {

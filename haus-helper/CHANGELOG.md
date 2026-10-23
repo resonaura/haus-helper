@@ -1,3 +1,10 @@
+# 0.3.19
+
+- Default new installations to unlimited saved-video storage while retaining the physical free-space reserve. Persist administrator-selected per-node budgets without pruning existing recordings.
+- Add a five-second, bounded Home Assistant server dashboard sample for host CPU, RAM, swap, disks and managed-container usage, plus optional host Docker/PM2 metrics on NVR nodes. The helper only exposes fixed read-only telemetry fields.
+- Open verified, fast-indexed H264/AAC recordings directly. Offer a separate compatibility repair for legacy recordings that fail browser decoding; keep source videos unchanged.
+- Keep motion event startup resilient when storage admission is paused, without hiding the camera discovery state.
+
 # 0.3.18
 
 - Use the supplied Haus macOS artwork for the add-on icon, preserving its padding and shadow. Camera, recording, cluster and backup behavior is unchanged.

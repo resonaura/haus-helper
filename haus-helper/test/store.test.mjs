@@ -292,3 +292,24 @@ test("recording policy migration preserves known cameras, explicit opt-outs and 
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("lowering a quota never deletes existing media before age retention", async (t) => {
+  const store = await fixture(t),
+    now = Date.now();
+  const event = store.create(
+    "camera.fixture",
+    "motion",
+    now - 10000,
+    now - 9000,
+  );
+  store.finish(event.id, { bytes: 10000000, duration: 1 });
+  await writeFile(store.path(event.id), "retained-original");
+  assert.equal(
+    await store.prune(
+      { retention_days: 7, max_storage_gb: 1 / 1024 ** 3 },
+      now,
+    ),
+    0,
+  );
+  assert.equal(store.get(event.id).bytes, 10000000);
+});
