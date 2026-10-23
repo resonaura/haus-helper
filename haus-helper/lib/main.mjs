@@ -195,6 +195,14 @@ const distribution = setInterval(
     })().catch(() => {}),
   10000,
 );
+// Distribution can spend several seconds verifying/archive-copying media.  Keep
+// the inexpensive admission check independent so an idle capable NVR can take
+// the next old clip shortly after it finishes the previous one.  The worker
+// itself still admits only one job and rejects pressured or undersized nodes.
+const recentPreparation = setInterval(
+  () => void recentPlayback.tick().catch(() => {}),
+  2000,
+);
 const warming = setInterval(() => void warm.tick().catch(() => {}), 4000);
 const detection = setInterval(() => void motion.tick().catch(() => {}), 4000);
 const availabilityHeartbeat = setInterval(() => {
@@ -216,6 +224,7 @@ async function stop() {
   await warm.stop();
   clearInterval(maintenance);
   clearInterval(distribution);
+  clearInterval(recentPreparation);
   await cluster.stop();
   clearInterval(availabilityHeartbeat);
   clearInterval(retry);
