@@ -1,7 +1,11 @@
-import { inspectOriginalPlayback } from "./playback-compatible.mjs";
+import {
+  inspectOriginalPlayback,
+  ORIGINAL_POLICY_VERSION,
+} from "./playback-compatible.mjs";
 import { MediaQueue } from "./media-queue.mjs";
 import {
   PLAYBACK_VERSION,
+  playbackReady,
   playbackArguments,
   inspectCadence,
 } from "./playback.mjs";
@@ -599,11 +603,23 @@ export class Recorder {
               (event.endAt - ready[0].start) / 1000,
             )
           : {};
+        const originalProvenance = packetCopy
+          ? this.cameras?.find((camera) => camera.id === event.cameraId)
+              ?.playbackSource
+          : { kind: "haus-encoder", profile: 1 };
         const compatible =
           !packetCopy ||
-          (await inspectOriginalPlayback(output, alignment).catch(() => false));
+          (await inspectOriginalPlayback(
+            output,
+            alignment,
+            originalProvenance,
+          ).catch(() => false));
         this.store.setPlayback(event.id, 0, compatible ? PLAYBACK_VERSION : 0, {
           ...alignment,
+          originalProvenance,
+          originalPolicyVersion: compatible
+            ? ORIGINAL_POLICY_VERSION
+            : undefined,
           audio: info.audio,
           sourceAudioMissing: this.config.record_audio && !info.audio,
           ...(compatible && packetCopy ? { originalCompatible: true } : {}),
@@ -691,7 +707,7 @@ export class Recorder {
       return this.playbackJobs.get(event.id);
     }
     if (
-      event.playbackVersion === PLAYBACK_VERSION &&
+      playbackReady(event) &&
       (!forceCompatibility ||
         event.playbackInfo?.compatibilityRepaired === true)
     )
@@ -720,6 +736,7 @@ export class Recorder {
           (await inspectOriginalPlayback(
             this.store.path(event.id),
             alignment,
+            event.playbackInfo?.originalProvenance,
           ).catch(() => false));
         if (originalCompatible && !urgency.forceCompatibility) {
           this.store.setPlayback(event.id, 0, PLAYBACK_VERSION, {
@@ -727,6 +744,7 @@ export class Recorder {
             ...diagnostics,
             ...alignment,
             originalCompatible: true,
+            originalPolicyVersion: ORIGINAL_POLICY_VERSION,
           });
           return this.store.path(event.id);
         }

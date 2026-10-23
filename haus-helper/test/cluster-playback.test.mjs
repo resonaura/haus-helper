@@ -90,7 +90,13 @@ async function fixture(t) {
     uploadSupported = true,
   } = {}) => {
     const authenticate = authenticator(key),
-      calls = { started: 0, deleted: 0, polls: 0, uploaded: 0 };
+      calls = {
+        started: 0,
+        deleted: 0,
+        polls: 0,
+        uploaded: 0,
+        removedBlobs: 0,
+      };
     let sourcePresent = replicated;
     const job = randomUUID();
     const json = (res, code, value) =>
@@ -116,7 +122,16 @@ async function fixture(t) {
         assert.equal(req.headers["x-haus-digest"], digest(media));
         calls.uploaded++;
         sourcePresent = true;
-        return json(res, 201, {});
+        return json(res, 201, { existing: false });
+      }
+      if (req.method === "DELETE" && req.url === `/v1/blobs/${digest(media)}`) {
+        calls.removedBlobs++;
+        sourcePresent = false;
+        return json(res, 200, { deleted: true });
+      }
+      if (req.method === "POST" && req.url === "/v1/recordings") {
+        req.resume();
+        return json(res, 201, { saved: true });
       }
       if (req.method === "POST" && req.url === "/v1/playback") {
         const chunks = [];
@@ -345,4 +360,71 @@ test("parallel selections cannot claim the same worker slot from stale health da
   await cancelled;
   assert.equal(node.calls.started, 1);
   assert.equal(node.calls.deleted, 1);
+});
+
+test("temporary originals on stream-only workers stay pinned during playback and are reclaimed without touching HA originals", async (t) => {
+  const f = await fixture(t);
+  let started;
+  const registered = new Promise((resolve) => {
+    started = resolve;
+  });
+  const peer = await f.add({ replicated: false, onStart: started });
+  peer.node.roles = ["stream"];
+  const pending = f.cluster.preparePlayback(f.event, { output: f.output });
+  await registered;
+  assert.equal(
+    f.store.db
+      .prepare("SELECT kind FROM cluster_locations WHERE node_id=?")
+      .get(peer.node.id).kind,
+    "preparation",
+  );
+  await f.cluster.prune([peer.node]);
+  assert.equal(peer.calls.removedBlobs, 0, "a running decoder owns a pin");
+  assert.equal(await pending, true);
+  await f.cluster.prune([peer.node]);
+  assert.equal(peer.calls.removedBlobs, 1);
+  assert.equal(
+    f.store.db.prepare("SELECT count(*) AS n FROM cluster_locations").get().n,
+    0,
+  );
+  assert.deepEqual(await readFile(f.store.path(f.event.id)), media);
+});
+
+test("normal replication can adopt a temporary original and prevents its deletion after playback", async (t) => {
+  const f = await fixture(t);
+  let started;
+  const registered = new Promise((resolve) => {
+    started = resolve;
+  });
+  const peer = await f.add({ replicated: false, onStart: started });
+  const pending = f.cluster.preparePlayback(f.event, { output: f.output });
+  await registered;
+  f.store.db
+    .prepare(
+      "INSERT INTO cluster_media(event_id,digest,bytes,version)VALUES(?,?,?,?)",
+    )
+    .run(f.event.id, digest(media), media.length, f.event.playbackVersion);
+  await f.cluster.replicate(f.store.path(f.event.id), digest(media), "media", [
+    peer.node,
+  ]);
+  assert.equal(
+    f.store.db
+      .prepare("SELECT kind FROM cluster_locations WHERE node_id=?")
+      .get(peer.node.id).kind,
+    "media",
+  );
+  await pending;
+  await f.cluster.prune([peer.node]);
+  assert.equal(
+    peer.calls.removedBlobs,
+    0,
+    "an adopted recovery copy belongs to regular retention",
+  );
+  f.store.db.prepare("DELETE FROM events WHERE id=?").run(f.event.id);
+  await f.cluster.prune([peer.node]);
+  assert.equal(
+    peer.calls.removedBlobs,
+    1,
+    "independent event expiry still cleans the replica",
+  );
 });

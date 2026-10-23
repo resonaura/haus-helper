@@ -112,6 +112,29 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
       camera.deviceId,
       ...camera.aliases.map((id) => registry.get(id)?.device_id),
     ].filter(Boolean);
+    const sources = [camera.id, ...camera.aliases].flatMap((id) => {
+      const entry = registry.get(id),
+        device = deviceMap.get(entry?.device_id);
+      return device &&
+        entry &&
+        !["generic", "proxy", "template"].includes(entry.platform)
+        ? [
+            {
+              kind: "camera",
+              platform: entry.platform,
+              manufacturer: device.manufacturer,
+              model: device.model,
+            },
+          ]
+        : [];
+    });
+    // A unique registered physical source supplies identity; names and rooms never confer trust.
+    const identities = [
+      ...new Map(
+        sources.map((source) => [JSON.stringify(source), source]),
+      ).values(),
+    ];
+    camera.playbackSource = identities.length === 1 ? identities[0] : undefined;
     camera.batteryPowered = states.some(
       (sensor) =>
         camera.deviceIds.includes(registry.get(sensor.entity_id)?.device_id) &&

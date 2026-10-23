@@ -207,3 +207,35 @@ test("battery warming policy uses physical aliases and ignores unassigned sensor
     false,
   );
 });
+
+test("playback provenance follows one registered physical source through an explicit wrapper, never camera names", () => {
+  const states = [
+    state("camera.garden", "Garden"),
+    state("camera.garden_internal", "Garden Internal"),
+    state("camera.eufy_t8410c", "Eufy T8410C"),
+  ];
+  const entities = [
+    { entity_id: "camera.garden", platform: "generic" },
+    {
+      entity_id: "camera.garden_internal",
+      platform: "eufy_security",
+      device_id: "physical",
+    },
+  ];
+  const cameras = discoverCameras(states, entities, [
+    { id: "physical", manufacturer: "Eufy Security", model: "T8410C" },
+  ]);
+  assert.deepEqual(
+    cameras.find((c) => c.id === "camera.garden").playbackSource,
+    {
+      kind: "camera",
+      platform: "eufy_security",
+      manufacturer: "Eufy Security",
+      model: "T8410C",
+    },
+  );
+  assert.equal(
+    cameras.find((c) => c.id === "camera.eufy_t8410c").playbackSource,
+    undefined,
+  );
+});

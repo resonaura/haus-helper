@@ -104,7 +104,19 @@ async function fixture(t, standalone = false) {
             roles: ["storage"],
             remote: {
               settings: { storageLimitBytes: null, source: "default" },
-              host: { scope: "container" },
+              host: {
+                scope: "container",
+                disks: [
+                  { id: "disk-a", kind: "disk", type: "disk", physical: true },
+                  {
+                    id: "volume-a",
+                    kind: "volume",
+                    type: "container",
+                    physical: false,
+                    parentIds: ["disk-a"],
+                  },
+                ],
+              },
               storage: { availableBytes: 900 },
             },
           },
@@ -175,6 +187,16 @@ test("aggregates real HA host and managed container samples, preserves unknown v
   );
   assert.equal(primary.host.pm2.available, false);
   assert.equal(first.servers[1].host.scope, "container");
+  assert.deepEqual(first.servers[1].host.disks, [
+    { id: "disk-a", kind: "disk", type: "disk", physical: true },
+    {
+      id: "volume-a",
+      kind: "volume",
+      type: "container",
+      physical: false,
+      parentIds: ["disk-a"],
+    },
+  ]);
   assert.equal(JSON.stringify(first).includes("private"), false);
   const count = f.calls.length;
   await f.servers.status();

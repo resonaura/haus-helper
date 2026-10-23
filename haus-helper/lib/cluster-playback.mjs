@@ -70,10 +70,12 @@ export async function prepareClusterPlayback(
   for (const node of candidates) {
     if (cluster.playbackNodes.has(node.id)) continue;
     cluster.playbackNodes.add(node.id);
+    let releaseSource;
     let id,
       outputCreated = false,
       complete = false;
     try {
+      releaseSource = await cluster.pinBlob(node.id, digest);
       abort.throwIfAborted();
       const head = await nodeRequest(node, `/v1/blobs/${digest}`, {
         method: "HEAD",
@@ -99,8 +101,15 @@ export async function prepareClusterPlayback(
           signal: abort,
           timeout: 120000,
         });
+        if (!uploaded.ok) {
+          await uploaded.body?.cancel();
+          throw new Error("source_upload_failed");
+        }
         await uploaded.body?.cancel();
-        if (!uploaded.ok) throw new Error("source_upload_failed");
+        // The node returns 201 only when this request created the immutable blob;
+        // 200 means a concurrent/pre-existing owner won the atomic insertion.
+        if (uploaded.status === 201)
+          cluster.notePlaybackUpload(node.id, digest);
       }
       const source = await nodeRequest(node, `/v1/blobs/${digest}`, {
         method: "HEAD",
@@ -207,6 +216,7 @@ export async function prepareClusterPlayback(
         })
           .then((response) => response.body?.cancel())
           .catch(() => {});
+      releaseSource?.();
       cluster.playbackNodes.delete(node.id);
     }
   }

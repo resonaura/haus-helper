@@ -945,6 +945,9 @@ test("verified originals bypass encoders and an explicit compatibility repair st
   ]);
   const before = await readFile(originalPath);
   store.finish(event.id, { bytes: before.length, duration: 2 });
+  store.setPlayback(event.id, 0, 0, {
+    originalProvenance: { kind: "haus-encoder", profile: 1 },
+  });
   let remoteCalls = 0;
   recorder.prepareRemote = async () => {
     remoteCalls++;
