@@ -142,7 +142,7 @@ export function createApi({
       }
       if (
         req.method === "GET" &&
-        ["/", "/index.html", "/app.js", "/style.css", "/icon.svg"].includes(
+        ["/", "/index.html", "/app.js", "/style.css", "/icon.png"].includes(
           path,
         )
       ) {
@@ -151,7 +151,7 @@ export function createApi({
           html: "text/html",
           js: "text/javascript",
           css: "text/css",
-          svg: "image/svg+xml",
+          png: "image/png",
         }[filename.split(".").at(-1)];
         const bytes = await readFile(join(web, filename));
         res

@@ -8,7 +8,9 @@ import {
   compatiblePackets,
   hasFrontIndex,
   inspectOriginalPlayback,
+  trustedOriginalParameters,
 } from "../lib/playback-compatible.mjs";
+const encoder = { kind: "haus-encoder", profile: 1 };
 
 const good = () => ({
   streams: [
@@ -38,7 +40,7 @@ const good = () => ({
 });
 
 test("only admits compatible indexed packets with short GOPs, continuous timestamps and aligned real audio", () => {
-  assert.equal(compatiblePackets(good()), true);
+  assert.equal(compatiblePackets(good(), {}, encoder), true);
   for (const mutate of [
     (x) => (x.streams[0].codec_name = "hevc"),
     (x) => (x.streams[0].pix_fmt = "yuv420p10le"),
@@ -53,10 +55,16 @@ test("only admits compatible indexed packets with short GOPs, continuous timesta
   ]) {
     const input = good();
     mutate(input);
-    assert.equal(compatiblePackets(input), false);
+    assert.equal(compatiblePackets(input, {}, encoder), false);
   }
-  assert.equal(compatiblePackets(good(), { audioTrimSeconds: 1 }), false);
-  assert.equal(compatiblePackets(good(), { audioTailSeconds: 5 }), false);
+  assert.equal(
+    compatiblePackets(good(), { audioTrimSeconds: 1 }, encoder),
+    false,
+  );
+  assert.equal(
+    compatiblePackets(good(), { audioTailSeconds: 5 }, encoder),
+    false,
+  );
 });
 
 test("real H264/AAC faststart original needs no compatibility encode, while tail-indexed originals keep fallback", async (t) => {
@@ -92,9 +100,71 @@ test("real H264/AAC faststart original needs no compatibility encode, while tail
     file,
   ]);
   const original = await readFile(file);
-  assert.equal(await inspectOriginalPlayback(file), true);
+  assert.equal(await inspectOriginalPlayback(file, {}, encoder), true);
   assert.deepEqual(await readFile(file), original);
   await runMedia("ffmpeg", ["-v", "error", "-i", file, "-c", "copy", tail]);
   assert.equal(await hasFrontIndex(tail), false);
-  assert.equal(await inspectOriginalPlayback(tail), false);
+  assert.equal(await inspectOriginalPlayback(tail, {}, encoder), false);
+});
+
+test("packet timing cannot confer trust on an unknown or unproven Aqara bitstream", () => {
+  assert.equal(compatiblePackets(good()), false);
+  for (const provenance of [
+    undefined,
+    {
+      kind: "camera",
+      platform: "mqtt",
+      manufacturer: "Aqara",
+      model: "Camera E1",
+    },
+    {
+      kind: "camera",
+      platform: "mqtt",
+      manufacturer: "Aqara",
+      model: "Camera Hub G5 Pro (Wi-Fi)",
+    },
+  ]) {
+    const info = good();
+    Object.assign(info.streams[0], {
+      profile: "Main",
+      level: 50,
+      width: 2688,
+      height: 1520,
+      has_b_frames: 0,
+    });
+    assert.equal(compatiblePackets(info, {}, provenance), false);
+  }
+  const provenEufy = {
+    kind: "camera",
+    platform: "eufy_security",
+    manufacturer: "Eufy Security",
+    model: "T8410C",
+  };
+  const info = good();
+  Object.assign(info.streams[0], {
+    profile: "High",
+    level: 42,
+    width: 1920,
+    height: 1080,
+    has_b_frames: 0,
+  });
+  assert.equal(compatiblePackets(info, {}, provenEufy), true);
+  for (const change of [
+    { profile: "Main" },
+    { level: 50 },
+    { width: 2688 },
+    { has_b_frames: 2 },
+  ])
+    assert.equal(
+      trustedOriginalParameters({ ...info.streams[0], ...change }, provenEufy),
+      false,
+    );
+  assert.equal(
+    compatiblePackets(info, {}, { ...provenEufy, model: "Unknown" }),
+    false,
+  );
+  assert.equal(
+    compatiblePackets(info, {}, { ...provenEufy, platform: "generic" }),
+    false,
+  );
 });

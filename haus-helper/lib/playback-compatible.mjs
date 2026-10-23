@@ -1,5 +1,33 @@
 import { open } from "node:fs/promises";
 import { runMedia } from "./media.mjs";
+export const ORIGINAL_POLICY_VERSION = 1;
+
+/** Packet timing is not a hardware-decoder proof. Only validated capture provenance admits originals. */
+export function trustedOriginalParameters(video, provenance) {
+  if (provenance?.kind === "haus-encoder" && provenance.profile === 1)
+    return true;
+  return (
+    provenance?.kind === "camera" &&
+    provenance.platform === "eufy_security" &&
+    provenance.manufacturer === "Eufy Security" &&
+    provenance.model === "T8410C" &&
+    video?.profile === "High" &&
+    video.level === 42 &&
+    video.width === 1920 &&
+    video.height === 1080 &&
+    video.has_b_frames === 0
+  );
+}
+
+export function hasTrustedProvenance(provenance) {
+  return (
+    (provenance?.kind === "haus-encoder" && provenance.profile === 1) ||
+    (provenance?.kind === "camera" &&
+      provenance.platform === "eufy_security" &&
+      provenance.manufacturer === "Eufy Security" &&
+      provenance.model === "T8410C")
+  );
+}
 
 /** A seekable MP4 must expose its index before the first media payload. */
 export async function hasFrontIndex(path) {
@@ -31,10 +59,11 @@ export async function hasFrontIndex(path) {
 }
 
 /** Packet-level admission is conservative: questionable media keeps the repair path. */
-export function compatiblePackets(info, alignment = {}) {
+export function compatiblePackets(info, alignment = {}, provenance) {
   const video = info.streams?.find((s) => s.codec_type === "video");
   const audio = info.streams?.find((s) => s.codec_type === "audio");
   if (
+    !trustedOriginalParameters(video, provenance) ||
     video?.codec_name !== "h264" ||
     video.pix_fmt !== "yuv420p" ||
     !["Baseline", "Constrained Baseline", "Main", "High"].includes(
@@ -93,7 +122,12 @@ export function compatiblePackets(info, alignment = {}) {
   );
 }
 
-export async function inspectOriginalPlayback(path, alignment = {}) {
+export async function inspectOriginalPlayback(
+  path,
+  alignment = {},
+  provenance,
+) {
+  if (!hasTrustedProvenance(provenance)) return false;
   if (!(await hasFrontIndex(path))) return false;
   const { stdout } = await runMedia(
     "ffprobe",
@@ -101,7 +135,7 @@ export async function inspectOriginalPlayback(path, alignment = {}) {
       "-v",
       "error",
       "-show_entries",
-      "stream=index,codec_name,codec_type,profile,pix_fmt,start_time,duration:packet=stream_index,pts_time,dts_time,flags",
+      "stream=index,codec_name,codec_type,profile,pix_fmt,start_time,duration,level,width,height,has_b_frames:packet=stream_index,pts_time,dts_time,flags",
       "-of",
       "json",
       path,
@@ -109,7 +143,7 @@ export async function inspectOriginalPlayback(path, alignment = {}) {
     { timeout: 15000, maxOutput: 4000000 },
   );
   try {
-    return compatiblePackets(JSON.parse(stdout), alignment);
+    return compatiblePackets(JSON.parse(stdout), alignment, provenance);
   } catch {
     return false;
   }

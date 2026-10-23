@@ -17,6 +17,8 @@ export class Cluster {
     this.abort = new AbortController();
     this.errors = new Map();
     this.playbackNodes = new Set();
+    this.blobPins = new Map();
+    this.blobDeletes = new Map();
     store.db
       .exec(`CREATE TABLE IF NOT EXISTS cluster_nodes(id TEXT PRIMARY KEY,value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS cluster_locations(digest TEXT NOT NULL,node_id TEXT NOT NULL,kind TEXT NOT NULL,PRIMARY KEY(digest,node_id));
@@ -43,6 +45,28 @@ export class Cluster {
       .prepare("SELECT id,value FROM cluster_nodes")
       .all()
       .map((row) => ({ id: row.id, ...JSON.parse(row.value) }));
+  }
+  /** Pins synchronize replica adoption and temporary playback against pruning. */
+  async pinBlob(nodeId, digest) {
+    const key = `${nodeId}:${digest}`;
+    while (this.blobDeletes.has(key)) await this.blobDeletes.get(key);
+    this.abort.signal.throwIfAborted();
+    this.blobPins.set(key, (this.blobPins.get(key) ?? 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = (this.blobPins.get(key) ?? 1) - 1;
+      if (remaining) this.blobPins.set(key, remaining);
+      else this.blobPins.delete(key);
+    };
+  }
+  notePlaybackUpload(nodeId, digest) {
+    this.store.db
+      .prepare(
+        "INSERT INTO cluster_locations(digest,node_id,kind)VALUES(?,?,'preparation') ON CONFLICT(digest,node_id)DO NOTHING",
+      )
+      .run(digest, nodeId);
   }
   canPreparePlayback() {
     return playbackCandidates(this).length > 0;
@@ -228,6 +252,7 @@ export class Cluster {
     const bytes = info.size;
     for (const node of nodes) {
       if (this.stopped) return;
+      const release = await this.pinBlob(node.id, digest);
       try {
         let metadata, metadataHash;
         if (kind === "media") {
@@ -242,11 +267,11 @@ export class Cluster {
         }
         const location = this.store.db
           .prepare(
-            "SELECT catalog_version, metadata_hash FROM cluster_locations WHERE digest=? AND node_id=?",
+            "SELECT kind, catalog_version, metadata_hash FROM cluster_locations WHERE digest=? AND node_id=?",
           )
           .get(digest, node.id);
         if (
-          location &&
+          location?.kind === kind &&
           (kind !== "media" ||
             (location.catalog_version === 1 &&
               location.metadata_hash === metadataHash))
@@ -322,6 +347,8 @@ export class Cluster {
         this.errors.delete(node.id);
       } catch {
         this.errors.set(node.id, "Copy pending · will retry");
+      } finally {
+        release();
       }
     }
   }
@@ -421,20 +448,38 @@ export class Cluster {
         .prepare("SELECT digest,kind FROM cluster_locations WHERE node_id=?")
         .all(node.id);
       for (const row of rows) {
-        if ((row.kind === "backup" ? backups : media).has(row.digest)) continue;
-        try {
-          const response = await nodeRequest(node, `/v1/blobs/${row.digest}`, {
-            method: "DELETE",
-            signal: this.abort.signal,
-          });
-          await response.body?.cancel();
-          if (response.ok)
-            this.store.db
-              .prepare(
-                "DELETE FROM cluster_locations WHERE digest=? AND node_id=?",
-              )
-              .run(row.digest, node.id);
-        } catch {}
+        if (
+          row.kind !== "preparation" &&
+          (row.kind === "backup" ? backups : media).has(row.digest)
+        )
+          continue;
+        const key = `${node.id}:${row.digest}`;
+        if (this.blobPins.has(key) || this.blobDeletes.has(key)) continue;
+        const remove = (async () => {
+          try {
+            const response = await nodeRequest(
+              node,
+              `/v1/blobs/${row.digest}`,
+              {
+                method: "DELETE",
+                signal: this.abort.signal,
+                timeout: 10000,
+              },
+            );
+            await response.body?.cancel();
+            if (response.ok)
+              this.store.db
+                .prepare(
+                  "DELETE FROM cluster_locations WHERE digest=? AND node_id=?",
+                )
+                .run(row.digest, node.id);
+          } catch {
+          } finally {
+            this.blobDeletes.delete(key);
+          }
+        })();
+        this.blobDeletes.set(key, remove);
+        await remove;
       }
     }
     this.store.db.exec(

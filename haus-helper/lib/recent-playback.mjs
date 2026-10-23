@@ -1,6 +1,7 @@
-import { PLAYBACK_VERSION } from "./playback.mjs";
+import { ORIGINAL_POLICY_VERSION } from "./playback-compatible.mjs";
+import { playbackReady, PLAYBACK_VERSION } from "./playback.mjs";
 
-/** Prepare a small recent working set on idle capable NVRs, never on HA fallback. */
+/** Drain a bounded page of pending recordings on idle NVRs, never on HA fallback. */
 export class RecentPlayback {
   constructor(store, recorder, cluster, now = () => Date.now()) {
     Object.assign(this, { store, recorder, cluster, now });
@@ -17,25 +18,25 @@ export class RecentPlayback {
       return;
     const rows = this.store.db
       .prepare(
-        "SELECT id FROM events WHERE status='ready' ORDER BY start_at DESC LIMIT 64",
+        `SELECT id FROM events WHERE status='ready' AND
+          (playback_version!=? OR (coalesce(playback_bytes,0)=0 AND
+           json_extract(playback_info,'$.originalCompatible')=1 AND
+           coalesce(json_extract(playback_info,'$.originalPolicyVersion'),0)!=?))
+          ORDER BY start_at DESC LIMIT 64`,
       )
-      .all();
+      .all(PLAYBACK_VERSION, ORIGINAL_POLICY_VERSION);
     const current = new Set(rows.map(({ id }) => id));
     for (const id of this.attempts.keys())
       if (!current.has(id)) this.attempts.delete(id);
-    const cameras = new Map();
     for (const { id } of rows) {
       const event = this.store.get(id);
-      const count = cameras.get(event.cameraId) ?? 0;
-      if (count >= 2) continue;
-      cameras.set(event.cameraId, count + 1);
       const camera = this.recorder.cameras?.find(
         (item) => item.id === event.cameraId,
       );
       if (
         !camera?.enabled ||
         !camera.available ||
-        event.playbackVersion === PLAYBACK_VERSION ||
+        playbackReady(event) ||
         this.now() - (this.attempts.get(id) ?? -Infinity) < 60_000 ||
         !this.cluster.canPreparePlayback(event)
       )

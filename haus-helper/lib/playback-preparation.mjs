@@ -1,4 +1,4 @@
-import { PLAYBACK_VERSION } from "./playback.mjs";
+import { playbackReady } from "./playback.mjs";
 
 /** Short HTTP polls survive ingress timeouts without duplicating an encoder. */
 export class PlaybackPreparation {
@@ -14,7 +14,7 @@ export class PlaybackPreparation {
     if (!options.forceCompatibility && repair?.state === "preparing")
       return "preparing";
     if (
-      event.playbackVersion === PLAYBACK_VERSION &&
+      playbackReady(event) &&
       (!options.forceCompatibility ||
         event.playbackInfo?.compatibilityRepaired === true)
     ) {

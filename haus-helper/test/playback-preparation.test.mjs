@@ -110,3 +110,36 @@ test("explicit repair does not reuse the original ready marker and coalesces pol
     "ready",
   );
 });
+
+test("old packet-only ready originals are revalidated but normalized copies stay immediately ready", async () => {
+  const calls = [];
+  const prepare = new PlaybackPreparation({
+    preparePlayback: async (event) => {
+      calls.push(event.id);
+    },
+  });
+  const unsafe = {
+    id: "old-packet-only",
+    playbackVersion: 4,
+    playbackBytes: 0,
+    playbackInfo: { originalCompatible: true },
+  };
+  assert.equal(prepare.status(unsafe, 20), "preparing");
+  assert.equal(
+    prepare.status({ ...unsafe, id: "normalized", playbackBytes: 100 }, 20),
+    "ready",
+  );
+  assert.equal(
+    prepare.status(
+      {
+        ...unsafe,
+        id: "our-encoder",
+        playbackInfo: { originalCompatible: false },
+      },
+      20,
+    ),
+    "ready",
+  );
+  await pause(0);
+  assert.deepEqual(calls, [unsafe.id]);
+});

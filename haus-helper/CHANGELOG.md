@@ -1,3 +1,10 @@
+# 0.3.20
+
+- Require validated capture provenance as well as indexed packet timing before opening a camera original directly. Preserve fast opens for the proven Eufy T8410C stream and trusted Haus encodes; Aqara and unknown bitstreams retain normalized playback. Revalidate the overly broad 0.3.19 original markers without discarding existing compatibility copies.
+- Begin compatibility preparation after capture and drain older pending work on idle capable NVRs. A bounded pending page no longer stalls forever behind two already-prepared clips per camera.
+- Track and pin just-in-time originals uploaded to stream-only workers. Reclaim temporary copies after use, let regular replication adopt them safely, and preserve source recordings and recovery copies.
+- Use the supplied macOS artwork in the helper interface.
+
 # 0.3.19
 
 - Default new installations to unlimited saved-video storage while retaining the physical free-space reserve. Persist administrator-selected per-node budgets without pruning existing recordings.

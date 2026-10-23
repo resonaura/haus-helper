@@ -1,5 +1,16 @@
+import { ORIGINAL_POLICY_VERSION } from "./playback-compatible.mjs";
 import { runMedia } from "./media.mjs";
 export const PLAYBACK_VERSION = 4;
+export function playbackReady(event) {
+  if (event.playbackVersion !== PLAYBACK_VERSION) return false;
+  // 0.3.19 inferred original compatibility from timing alone. Invalidate only
+  // those unsafe markers; old normalized copies keep their proven playback.
+  return (
+    event.playbackBytes > 0 ||
+    event.playbackInfo?.originalCompatible !== true ||
+    event.playbackInfo?.originalPolicyVersion === ORIGINAL_POLICY_VERSION
+  );
+}
 /** Fixed cadence and bounded GOPs avoid multi-second decoder starvation and expensive seeks. */
 export function playbackArguments({
   copyVideo = false,

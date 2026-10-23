@@ -37,12 +37,12 @@ function fixture() {
     advance: (ms) => (at += ms),
   };
 }
-test("recent preparation is bounded to two latest clips per camera, including already prepared clips", async () => {
+test("recent preparation drains the bounded pending page beyond the last two clips per camera", async () => {
   const f = fixture();
   for (let i = 0; i < 10; i++) await f.recent.tick();
   assert.deepEqual(
     f.calls.map((x) => x.id),
-    ["0", "1", "3", "4"],
+    ["0", "1", "2", "3", "4", "5"],
   );
   assert.ok(f.calls.every((x) => x.priority < 0 && x.options.remoteOnly));
 });
@@ -101,8 +101,46 @@ test("a slow or failed worker creates one task at a time with a bounded retry in
   await f.recent.tick();
   await f.recent.tick();
   await f.recent.tick();
-  assert.deepEqual(f.calls, ["0", "1", "3", "4"]);
+  await f.recent.tick();
+  await f.recent.tick();
+  assert.deepEqual(f.calls, ["0", "1", "2", "3", "4", "5"]);
   f.advance(60000);
   await f.recent.tick();
   assert.equal(f.calls.at(-1), "0");
+});
+
+test("prepared recent rows do not bury old pending media or unsafe original markers", async (t) => {
+  const { Store } = await import("../lib/store.mjs");
+  const { mkdtemp, mkdir, rm } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const root = await mkdtemp(join(tmpdir(), "haus-pending-page-"));
+  await mkdir(join(root, "media"));
+  const store = new Store(join(root, "db.sqlite"), join(root, "media"));
+  t.after(async () => {
+    store.close();
+    await rm(root, { recursive: true, force: true });
+  });
+  for (let i = 0; i < 70; i++) {
+    const event = store.create("camera.a", "motion", 1000 + i, 3000 + i);
+    store.finish(event.id, { duration: 2, bytes: 1, playbackVersion: 4 });
+  }
+  const unsafe = store.create("camera.a", "motion", 100, 200);
+  store.finish(unsafe.id, { duration: 1, bytes: 1, playbackVersion: 4 });
+  store.setPlayback(unsafe.id, 0, 4, { originalCompatible: true });
+  const calls = [];
+  const recorder = {
+    stopped: false,
+    playbackJobs: new Map(),
+    encoding: { pending: [] },
+    cameras: [{ id: "camera.a", enabled: true, available: true }],
+    preparePlayback: async (event) => {
+      calls.push(event.id);
+    },
+  };
+  const recent = new RecentPlayback(store, recorder, {
+    canPreparePlayback: () => true,
+  });
+  await recent.tick();
+  assert.deepEqual(calls, [unsafe.id]);
 });

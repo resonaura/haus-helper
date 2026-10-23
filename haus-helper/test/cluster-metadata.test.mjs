@@ -238,3 +238,33 @@ test("node storage policy updates are authenticated, preserve enabled state and 
   ])
     await assert.rejects(() => cluster.update(node.id, patch), /invalid_node/);
 });
+
+test("replica metadata never advertises old packet-only originals as normalized playback", async () => {
+  const { recordingMetadata } = await import("../lib/recording-metadata.mjs");
+  const event = {
+    id: "fixture",
+    playbackVersion: 4,
+    playbackBytes: 0,
+    playbackInfo: { originalCompatible: true },
+  };
+  assert.equal(recordingMetadata(event).playbackVersion, 0);
+  assert.equal(
+    recordingMetadata({ ...event, playbackBytes: 100 }).playbackVersion,
+    4,
+  );
+  const trusted = recordingMetadata({
+    ...event,
+    playbackInfo: {
+      originalCompatible: true,
+      originalPolicyVersion: 1,
+      originalProvenance: {
+        kind: "camera",
+        platform: "eufy_security",
+        manufacturer: "Eufy Security",
+        model: "T8410C",
+      },
+    },
+  });
+  assert.equal(trusted.playbackVersion, 4);
+  assert.equal(trusted.playbackInfo.originalProvenance.model, "T8410C");
+});
