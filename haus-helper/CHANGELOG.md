@@ -1,3 +1,7 @@
+# 0.3.25
+
+- Keep enabled camera RTSP sessions warm on capable NVR nodes for recording and pre-roll. Reuse the same NVR-owned producer for WebRTC viewing, honor camera preview leases, distribute session starts by node capacity, and preserve Aqara/Eufy P2P restream sources without routing media through Home Assistant.
+
 # 0.3.24
 
 - Synchronize home-server names and room assignments with the rest of the home's preferences. Preserve them in encrypted configuration snapshots and through revision conflicts without replacing unrelated settings.

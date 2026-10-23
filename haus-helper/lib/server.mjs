@@ -65,6 +65,7 @@ export function createApi({
   shared,
   warm,
   motion,
+  cameraSessions,
   servers = store?.db
     ? new Servers({ config, ha, store, cluster, backups })
     : null,
@@ -239,6 +240,7 @@ export function createApi({
             cluster: true,
             sharedPreferences: true,
             previewPreheat: true,
+            nvrCameraSessions: !!cameraSessions,
             softwareMotion: !!motion,
             customTalkback: true,
             recordingRepair: true,
@@ -359,7 +361,7 @@ export function createApi({
         });
       }
       const cameraMatch =
-        /^\/api\/cameras\/(camera\.[a-z0-9_]+)(?:\/(record|snapshot|talk|warm))?$/.exec(
+        /^\/api\/cameras\/(camera\.[a-z0-9_]+)(?:\/(record|snapshot|talk|warm|viewer(?:\/close)?))?$/.exec(
           path,
         );
       if (cameraMatch) {
@@ -370,6 +372,12 @@ export function createApi({
         );
         const id = camera?.id;
         if (!camera) return json(res, 404, { error: "camera_not_found" });
+        if (cameraSessions && req.method === "POST" && cameraMatch[2]?.startsWith("viewer")) {
+          const input = await requestBody(req);
+          return json(res, 200, cameraMatch[2] === "viewer/close"
+            ? await cameraSessions.closeViewer(id, input.owner, input.viewerId)
+            : await cameraSessions.viewer(camera, input.owner, input.viewerId, input.offer));
+        }
         if (warm && req.method === "POST" && cameraMatch[2] === "warm") {
           const input = await requestBody(req);
           if (typeof input.active !== "boolean")

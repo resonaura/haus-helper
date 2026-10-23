@@ -1,6 +1,7 @@
 import { CameraAvailability } from "./camera-availability.mjs";
 import { RecentPlayback } from "./recent-playback.mjs";
 import { WarmStreams } from "./warm-streams.mjs";
+import { NvrCameraSessions } from "./nvr-camera-sessions.mjs";
 import { Motion } from "./motion.mjs";
 import { SharedConfig } from "./shared-config.mjs";
 import { Backups } from "./backups.mjs";
@@ -39,12 +40,14 @@ cluster.enableRecordingCache(config);
 let registry = { states: [], entities: [], devices: [], cameras: [] };
 let refreshing;
 let dirty = false;
+const cameraSessions = new NvrCameraSessions({ config, store, cluster, registry: () => registry });
 const recorder = new Recorder(config, ha, store, undefined, {
   prepareRemote: (event, options) => cluster.preparePlayback(event, options),
+  capture: cameraSessions,
 });
 const availability = new CameraAvailability();
 const recentPlayback = new RecentPlayback(store, recorder, cluster);
-const warm = new WarmStreams(ha, recorder, cluster);
+const warm = new WarmStreams(ha, recorder, cluster, { sessions: cameraSessions });
 const motion = new Motion({ ha, recorder, cluster, warm, config });
 await motion.initialize();
 const observeAvailability = () => {
@@ -166,6 +169,7 @@ const server = createApi({
   shared,
   warm,
   motion,
+  cameraSessions,
 });
 await recorder.initialize();
 ha.start();
@@ -233,6 +237,7 @@ async function stop() {
   server.closeIdleConnections();
   await backups.stop();
   await recorder.stop();
+  await cameraSessions.stop();
   store.close();
   process.exit(0);
 }
