@@ -1,3 +1,7 @@
+# 0.3.24
+
+- Synchronize home-server names and room assignments with the rest of the home's preferences. Preserve them in encrypted configuration snapshots and through revision conflicts without replacing unrelated settings.
+
 # 0.3.23
 
 - Check every two seconds whether an idle, capable NVR can safely prepare the next retained legacy recording. Keep replica discovery, archive verification and cache rotation on their existing ten-second cadence, while preserving the one-worker limit and refusing pressured or undersized nodes. This reduces avoidable gaps between old-clip preparations without moving processing onto Home Assistant.

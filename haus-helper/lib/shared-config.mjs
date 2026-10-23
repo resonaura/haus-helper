@@ -8,6 +8,7 @@ const keys = new Set([
   "autoGroupLights",
   "disabledLightGroups",
   "roomIcons",
+  "serverDevices",
 ]);
 export class SharedConfig {
   constructor(store, onChange = () => {}) {

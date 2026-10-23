@@ -3,9 +3,11 @@ import assert from "node:assert/strict";
 import { mkdtemp, rm, mkdir, writeFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { Store } from "../lib/store.mjs";
-import { Backups } from "../lib/backups.mjs";
+import { Backups, unseal } from "../lib/backups.mjs";
+import { SharedConfig } from "../lib/shared-config.mjs";
+import { promisify } from "node:util";
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "haus-backups-")),
     media = join(root, "media");
@@ -20,6 +22,38 @@ async function fixture(t) {
   });
   return { root, store, backups };
 }
+test("encrypted configuration snapshots preserve server names and room assignments", async (t) => {
+  const { root, store, backups } = await fixture(t);
+  const shared = new SharedConfig(store);
+  const saved = shared.patch("0", {
+    favorites: ["light.narnia"],
+    serverDevices: {
+      "home-assistant": { areaId: "narnia" },
+      "node-miku": { name: "Miku", areaId: "narnia" },
+      "node-laptop": { name: "Black Laptop", areaId: "narnia" },
+    },
+  });
+  const backup = await backups.snapshot("haus");
+  const restoredDirectory = join(root, "recovered");
+  await mkdir(restoredDirectory);
+  const archive = join(restoredDirectory, "haus.tar.gz");
+  const metadata = await unseal(
+    backups.path(backup.digest),
+    archive,
+    backups.key,
+  );
+  assert.equal(metadata.kind, "haus");
+  await promisify(execFile)("tar", ["-xzf", archive, "-C", restoredDirectory]);
+  const restored = new Store(
+    join(restoredDirectory, "haus.sqlite"),
+    join(root, "media"),
+  );
+  try {
+    assert.deepEqual(new SharedConfig(restored).get(), saved);
+  } finally {
+    restored.close();
+  }
+});
 test("ring pruning keeps 24 configuration snapshots and 7 HA backups; only Haus-owned slugs are deleted", async (t) => {
   const { store, backups } = await fixture(t);
   const deleted = [];

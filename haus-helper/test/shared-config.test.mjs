@@ -21,3 +21,31 @@ test("shared preferences use revision guards and do not accept credentials or ar
     store.close();
   }
 });
+
+test("server names and room assignments synchronize without replacing other preferences", () => {
+  const store = new Store(":memory:", "/tmp");
+  try {
+    const shared = new SharedConfig(store);
+    const first = shared.patch("0", {
+      favorites: ["light.narnia"],
+      roomIcons: { narnia: "moon" },
+    });
+    const serverDevices = {
+      "home-assistant": { areaId: "narnia" },
+      "node-miku": { name: "Miku", areaId: "narnia" },
+      "node-laptop": { name: "Black Laptop", areaId: "narnia" },
+    };
+    const saved = shared.patch(first.revision, { serverDevices });
+    assert.deepEqual(saved.value.serverDevices, serverDevices);
+    assert.deepEqual(saved.value.favorites, ["light.narnia"]);
+    assert.deepEqual(saved.value.roomIcons, { narnia: "moon" });
+    assert.deepEqual(new SharedConfig(store).get(), saved);
+    assert.equal(
+      shared.patch(first.revision, { serverDevices: {} }).conflict,
+      true,
+    );
+    assert.deepEqual(shared.get().value.serverDevices, serverDevices);
+  } finally {
+    store.close();
+  }
+});
