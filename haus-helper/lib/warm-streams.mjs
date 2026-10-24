@@ -6,7 +6,7 @@ export class WarmStreams {
     ha,
     recorder,
     cluster,
-    { limit = 2, idleMs = 45000, now = () => Date.now() } = {},
+    { limit = 2, idleMs = 45000, now = () => Date.now(), sessions } = {},
   ) {
     this.ha = ha;
     this.recorder = recorder;
@@ -14,11 +14,13 @@ export class WarmStreams {
     this.limit = limit;
     this.idleMs = idleMs;
     this.now = now;
+    this.sessions = sessions;
     this.entries = new Map();
     this.leases = new Map();
     this.stopped = false;
   }
   sync(cameras) {
+    if (this.sessions) return;
     const available = new Set(
       cameras.filter((camera) => camera.available).map((camera) => camera.id),
     );
@@ -26,6 +28,7 @@ export class WarmStreams {
       if (!available.has(entry.id)) void this.release(entry).catch(() => {});
   }
   async touch(camera, owner, active, preview = false) {
+    if (this.sessions) return this.sessions.touch(camera, owner, active, preview);
     if (this.stopped) return { warm: false, reason: "stopped" };
     if (active && preview && camera.batteryPowered)
       return { warm: false, reason: "battery" };
@@ -162,6 +165,7 @@ export class WarmStreams {
     }
   }
   async tick() {
+    if (this.sessions) return this.sessions.tick();
     if (this.ticking) return;
     this.ticking = true;
     try {

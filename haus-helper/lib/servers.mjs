@@ -145,6 +145,9 @@ export class Servers {
     };
   }
   async status() {
+    // A slow/offline peer must not hold HA and other last-known cards hostage.
+    // Cluster owns/coalesces the bounded refresh and waits for it on shutdown.
+    void this.cluster?.refreshHealth?.().catch(() => {});
     const primary = await this.primary();
     const remotes = (this.cluster?.status().nodes ?? []).map((node) => ({
       id: node.id,

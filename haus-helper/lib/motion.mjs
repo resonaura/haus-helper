@@ -1,4 +1,5 @@
-import { randomBytes } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
+import { nvrCameraSource } from "./nvr-camera-sessions.mjs";
 import { access } from "node:fs/promises";
 import { nodeJson, nodeRequest } from "./node-client.mjs";
 import { once } from "node:events";
@@ -125,6 +126,7 @@ export class Motion {
     if (!job) return;
     this.jobs.delete(id);
     if (job.lease) this.warm.leases.delete(job.lease);
+    if (job.sessionOwner) await this.warm.sessions.release(id, job.sessionOwner);
     if (job.local) await job.worker.stop();
     else
       await nodeRequest(job.node, `/v1/detectors/${job.id}`, {
@@ -169,6 +171,7 @@ export class Motion {
     if (this.stopped) return;
     const epoch = this.epoch;
     const mode = camera.motionDetection.mode;
+    if (this.warm.sessions) return this.startNvr(camera, epoch, mode);
     const candidates = this.candidates().slice(0, 3);
     if (
       !candidates.length &&
@@ -242,6 +245,32 @@ export class Motion {
     this.jobs.set(camera.id, job);
     if (this.stopped || this.epoch !== epoch) await this.release(camera.id);
   }
+  async startNvr(camera, epoch, mode) {
+    const owner = `assist-${randomUUID()}`;
+    for (const node of this.candidates().slice(0, 3)) {
+      try {
+        const entry = await this.warm.sessions.ensure(camera, owner, false, node);
+        const remote = await nodeJson(node, "/v1/detectors", {
+          method: "POST",
+          data: { cameraSessionId: entry.id, owner, mode },
+          timeout: 5000,
+          signal: this.abort.signal,
+        });
+        if (!/^[a-f0-9-]{36}$/.test(remote.id)) throw new Error("invalid_detector_job");
+        this.jobs.set(camera.id, { id: remote.id, node, sessionId: entry.id, sessionOwner: owner, mode, state: "starting", sequence: 0 });
+        if (this.stopped || this.epoch !== epoch) await this.release(camera.id);
+        return;
+      } catch {
+        await this.warm.sessions.release(camera.id, owner);
+        this.cooldowns.set(node.id, this.now() + 30000);
+      }
+    }
+    if (this.candidates().length || !this.localSupported || [...this.jobs.values()].some((job) => job.local) || !this.capacity?.detectors || this.capacity.pressured || this.stopped || this.epoch !== epoch) return;
+    const source = nvrCameraSource(camera, this.warm.sessions.registry());
+    const job = { local: true, mode };
+    job.worker = new this.worker({ source: source.url, mode, interval: 2500, onDetection: (event) => this.deliver(camera, event, job) });
+    this.jobs.set(camera.id, job);
+  }
   async tick() {
     if (this.busy || this.stopped) return;
     this.busy = true;
@@ -294,7 +323,11 @@ export class Motion {
               : undefined;
             if (job.overloadedAt && this.now() - job.overloadedAt > 20000)
               throw new Error("detector_overloaded");
-            job.entry.expires = this.now() + 45000;
+            if (job.entry) job.entry.expires = this.now() + 45000;
+            if (job.sessionOwner) {
+              const entry = await this.warm.sessions.ensure(camera, job.sessionOwner, false, job.node);
+              if (entry.id !== job.sessionId) throw new Error("detector_session_replaced");
+            }
             const status = await nodeJson(job.node, `/v1/detectors/${job.id}`, {
               timeout: 4000,
               signal: this.abort.signal,

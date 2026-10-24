@@ -28,12 +28,13 @@ import { PrimarySourceRecovery } from "./primary-source-recovery.mjs";
 import { RecordingProgress } from "./recording-progress.mjs";
 import { MAX_ASSIST_DELAY_MS } from "./motion-settings.mjs";
 export class Recorder {
-  constructor(config, ha, store, onChange = () => {}, { prepareRemote } = {}) {
+  constructor(config, ha, store, onChange = () => {}, { prepareRemote, capture } = {}) {
     this.config = config;
     this.ha = ha;
     this.store = store;
     this.onChange = onChange;
     this.prepareRemote = prepareRemote;
+    this.capture = capture;
     this.remotePreparing = new Map();
     this.primaryRecovery = new PrimarySourceRecovery();
     this.buffers = new Map();
@@ -49,6 +50,7 @@ export class Recorder {
   async initialize() {
     await this.store.reconcileLocalMedia();
     for (const event of this.store.recording()) {
+      if (this.capture?.events.has(event.id)) continue;
       try {
         const info = await probe(this.store.path(event.id));
         const file = await stat(this.store.path(event.id));
@@ -90,6 +92,11 @@ export class Recorder {
   }
   sync(cameras) {
     this.cameras = cameras;
+    if (this.capture) {
+      this.capture.sync(cameras);
+      this.buffers = this.capture.buffers;
+      return;
+    }
     const enabled = new Set(
       cameras
         .filter(
@@ -304,6 +311,7 @@ export class Recorder {
         Math.min(at, current.startAt) + this.config.max_event_seconds * 1000,
       );
       this.active.set(cameraId, event);
+      if (this.capture) void this.capture.record(event).catch(() => {});
       this.onChange();
       return event;
     }
@@ -314,6 +322,7 @@ export class Recorder {
       throw new Error("recording_storage_limit");
     const event = this.store.create(cameraId, kind, at, endAt, sensorId);
     this.active.set(cameraId, event);
+    if (this.capture) void this.capture.record(event).catch(() => {});
     this.onChange();
     return event;
   }
@@ -370,13 +379,14 @@ export class Recorder {
           held &&
           now < event.startAt + this.config.max_event_seconds * 1000
         ) {
-          this.store.extendTail(
+          const extended = this.store.extendTail(
             event.id,
             Math.min(
               now + this.config.post_roll_seconds * 1000,
               event.startAt + this.config.max_event_seconds * 1000,
             ),
           );
+          if (this.capture) void this.capture.record(extended).catch(() => {});
           continue;
         }
         if (held)
@@ -397,6 +407,7 @@ export class Recorder {
         }
       }
       for (const buffer of this.buffers.values()) {
+        if (this.capture) continue;
         const camera = this.cameras?.find((item) => item.id === buffer.id);
         if (this.ha.primaryRecordingInput)
           this.primaryRecovery.consider(buffer, {
@@ -505,6 +516,19 @@ export class Recorder {
     }
   }
   async finishPinned(event) {
+    if (this.capture) {
+      try {
+        await this.capture.finalize(event);
+      } catch {
+        if (!this.stopped)
+          this.store.finish(event.id, {
+            status: "failed",
+            error: "The NVR recording could not be verified and saved",
+          });
+      }
+      this.onChange();
+      return;
+    }
     const buffer = this.buffers.get(event.cameraId) ?? {
       dir: join(
         this.config.data,
