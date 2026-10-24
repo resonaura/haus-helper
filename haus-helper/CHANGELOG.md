@@ -1,3 +1,9 @@
+# 0.3.31
+
+- Let the small encrypted recovery catalog complete while a full Home Assistant archive is pending. Verified cache rotation no longer waits for a long Supervisor backup and fills the recent-video budget in the meantime.
+- Keep one bounded task and independent retention/error state for each backup kind, preserve same-kind exclusion, cooldowns and shutdown cleanup, and never treat a configuration success as recovery from an HA backup failure.
+- Explain a rejected NVR storage reservation as a space problem instead of suggesting that the video failed integrity verification.
+
 # 0.3.30
 
 - Diagnose rejected NVR recording submissions separately from finalization/import failures, with event and camera correlation and bounded retry logging.

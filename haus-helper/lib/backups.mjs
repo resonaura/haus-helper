@@ -123,10 +123,11 @@ export class Backups {
     this.config = config;
     this.store = store;
     this.root = join(config.data, "backups");
-    this.busy = false;
+    this.running = new Map();
+    this.pruning = new Map();
+    this.errors = new Map();
     this.missing = new Set();
     this.abort = new AbortController();
-    this.error = undefined;
     this.lastConfigVersion = 0;
     store.db.exec(
       "CREATE TABLE IF NOT EXISTS haus_backups(digest TEXT PRIMARY KEY,kind TEXT NOT NULL,created_at INTEGER NOT NULL,bytes INTEGER NOT NULL,ha_slug TEXT); CREATE TABLE IF NOT EXISTS haus_backup_retries(kind TEXT PRIMARY KEY,next_at INTEGER NOT NULL,failures INTEGER NOT NULL)",
@@ -179,17 +180,33 @@ export class Backups {
         "Keep this key offline. Use haus-nvr recover with a .enc backup. It is never sent to worker nodes.",
     };
   }
+  get busy() {
+    return this.running.size > 0;
+  }
+  get error() {
+    return [...this.errors.values()].at(-1);
+  }
+  canSnapshot(kind = "haus") {
+    return !this.abort.signal.aborted && !this.running.has(kind);
+  }
   snapshot(kind = "haus") {
-    if (this.running) return Promise.reject(new Error("backup_busy"));
-    this.running = this.createSnapshot(kind).finally(() => {
-      this.running = undefined;
-    });
-    return this.running;
+    if (!["haus", "ha"].includes(kind))
+      return Promise.reject(new Error("invalid_backup_kind"));
+    if (!this.canSnapshot(kind))
+      return Promise.reject(new Error("backup_busy"));
+    // A slow Supervisor archive must not block the small recovery catalog
+    // needed to evict already-verified local video. At most one of each kind.
+    const task = Promise.resolve()
+      .then(() => this.createSnapshot(kind))
+      .finally(() => {
+        this.running.delete(kind);
+      });
+    this.running.set(kind, task);
+    return task;
   }
   async createSnapshot(kind = "haus") {
-    if (this.busy) throw new Error("backup_busy");
     if (!["haus", "ha"].includes(kind)) throw new Error("invalid_backup_kind");
-    this.busy = true;
+    this.abort.signal.throwIfAborted();
     let directory;
     const createdAt = Date.now();
     const dirtyAt = this.dirtyAt;
@@ -272,9 +289,9 @@ export class Backups {
       this.store.db
         .prepare("DELETE FROM haus_backup_retries WHERE kind=?")
         .run(kind);
-      this.error = undefined;
+      this.errors.delete(kind);
       if (kind === "haus" && this.dirtyAt === dirtyAt) this.dirtyAt = undefined;
-      await this.prune();
+      await this.prune(kind);
       return this.list().find((item) => item.digest === result.digest);
     } catch (error) {
       if (!this.abort.signal.aborted) {
@@ -294,17 +311,18 @@ export class Backups {
       const storage =
         ["backup_storage_full", "backup_too_large"].includes(error.message) ||
         error.code === "ENOSPC";
-      this.error = storage
+      const message = storage
         ? "Not enough free storage to keep this backup. Free space before retrying."
         : kind === "ha"
           ? "Home Assistant backup could not complete. Automatic retries will wait before trying again."
           : "Configuration backup could not complete. Automatic retries will wait before trying again.";
+      this.errors.delete(kind);
+      this.errors.set(kind, message);
       console.warn(
         `Haus ${kind} backup failed (${storage ? "storage" : error.status ? `Supervisor HTTP ${error.status}` : "backup operation"})`,
       );
       throw error;
     } finally {
-      this.busy = false;
       if (directory) await rm(directory, { recursive: true, force: true });
     }
   }
@@ -330,11 +348,25 @@ export class Backups {
     }
     return response;
   }
-  async prune() {
-    const counts = { haus: 0, ha: 0 };
-    for (const item of this.list()) {
-      const limit = item.kind === "ha" ? 7 : 24;
-      if (++counts[item.kind] <= limit) continue;
+  async prune(kind) {
+    return Promise.all(
+      (kind ? [kind] : ["haus", "ha"]).map((current) => {
+        const task = (this.pruning.get(current) ?? Promise.resolve()).then(() =>
+          this.pruneSnapshots(current),
+        );
+        this.pruning.set(
+          current,
+          task.catch(() => {}),
+        );
+        return task;
+      }),
+    );
+  }
+  async pruneSnapshots(kind) {
+    let count = 0;
+    for (const item of this.list().filter((item) => item.kind === kind)) {
+      const limit = kind === "ha" ? 7 : 24;
+      if (++count <= limit) continue;
       await unlink(this.path(item.digest)).catch((error) => {
         if (error.code !== "ENOENT") throw error;
       });
@@ -349,13 +381,14 @@ export class Backups {
   }
   async stop() {
     this.abort.abort();
-    await this.running?.catch(() => {});
+    await Promise.allSettled([...this.running.values()]);
+    await Promise.allSettled([...this.pruning.values()]);
   }
   markChanged() {
     this.dirtyAt = Date.now();
   }
   async tick() {
-    if (this.busy || this.abort.signal.aborted) return;
+    if (this.abort.signal.aborted) return;
     const list = this.list();
     const now = Date.now();
     const last = (kind) =>
@@ -366,12 +399,14 @@ export class Backups {
         .prepare("SELECT next_at FROM haus_backup_retries WHERE kind=?")
         .get(kind)?.next_at ?? 0);
     if (
+      this.canSnapshot("haus") &&
       ready("haus") &&
       (now - last("haus") > 3600000 ||
         (this.dirtyAt && now - this.dirtyAt >= 10000))
     )
       await this.snapshot("haus");
     else if (
+      this.canSnapshot("ha") &&
       !this.config.standalone &&
       this.config.ha_backups_enabled &&
       ready("ha") &&

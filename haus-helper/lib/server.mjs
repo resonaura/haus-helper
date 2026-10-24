@@ -222,7 +222,10 @@ export function createApi({
         const input = await requestBody(req);
         if (!["haus", "ha"].includes(input.kind))
           throw new Error("invalid_backup_kind");
-        if (backups.busy) return json(res, 409, { error: "backup_busy" });
+        if (
+          backups.canSnapshot ? !backups.canSnapshot(input.kind) : backups.busy
+        )
+          return json(res, 409, { error: "backup_busy" });
         if (input.kind === "ha" && config.standalone)
           return json(res, 409, { error: "supervisor_backups_unavailable" });
         void backups
@@ -372,11 +375,28 @@ export function createApi({
         );
         const id = camera?.id;
         if (!camera) return json(res, 404, { error: "camera_not_found" });
-        if (cameraSessions && req.method === "POST" && cameraMatch[2]?.startsWith("viewer")) {
+        if (
+          cameraSessions &&
+          req.method === "POST" &&
+          cameraMatch[2]?.startsWith("viewer")
+        ) {
           const input = await requestBody(req);
-          return json(res, 200, cameraMatch[2] === "viewer/close"
-            ? await cameraSessions.closeViewer(id, input.owner, input.viewerId)
-            : await cameraSessions.viewer(camera, input.owner, input.viewerId, input.offer));
+          return json(
+            res,
+            200,
+            cameraMatch[2] === "viewer/close"
+              ? await cameraSessions.closeViewer(
+                  id,
+                  input.owner,
+                  input.viewerId,
+                )
+              : await cameraSessions.viewer(
+                  camera,
+                  input.owner,
+                  input.viewerId,
+                  input.offer,
+                ),
+          );
         }
         if (warm && req.method === "POST" && cameraMatch[2] === "warm") {
           const input = await requestBody(req);

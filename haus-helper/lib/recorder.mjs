@@ -28,7 +28,13 @@ import { PrimarySourceRecovery } from "./primary-source-recovery.mjs";
 import { RecordingProgress } from "./recording-progress.mjs";
 import { MAX_ASSIST_DELAY_MS } from "./motion-settings.mjs";
 export class Recorder {
-  constructor(config, ha, store, onChange = () => {}, { prepareRemote, capture } = {}) {
+  constructor(
+    config,
+    ha,
+    store,
+    onChange = () => {},
+    { prepareRemote, capture } = {},
+  ) {
     this.config = config;
     this.ha = ha;
     this.store = store;
@@ -519,11 +525,15 @@ export class Recorder {
     if (this.capture) {
       try {
         await this.capture.finalize(event);
-      } catch {
+      } catch (error) {
         if (!this.stopped)
           this.store.finish(event.id, {
             status: "failed",
-            error: "The NVR recording could not be verified and saved",
+            error:
+              error?.code === "storage_full" ||
+              error?.message === "storage_full"
+                ? "Free space on your recording server and try again."
+                : "The NVR recording could not be verified and saved",
           });
       }
       this.onChange();
