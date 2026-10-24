@@ -252,6 +252,40 @@ test("HA defaults to a 10GiB recent-video cache without replacing an explicit sa
   assert.equal(f.config.max_storage_gb, 0);
 });
 
+test("verified recent-cache rotation leaves capture headroom before the hard limit", async (t) => {
+  const f = await fixture(t, { limit: 100 });
+  const old = await f.event(0, { prepared: false });
+  const fresh = await f.event(1, { prepared: false });
+  const newest = await f.event(2, { prepared: false });
+  assert.equal(f.store.totals().bytes, 96);
+  f.setVerification("unverified");
+  await f.cluster.work();
+  assert.equal(
+    f.store.get(old.id).localOriginal,
+    true,
+    "headroom cannot evict an unverified original",
+  );
+  f.setVerification("valid");
+  await f.cluster.work();
+  assert.equal(f.store.get(old.id).localOriginal, false);
+  assert.equal(f.store.get(fresh.id).localOriginal, true);
+  assert.equal(f.store.get(newest.id).localOriginal, true);
+  assert.equal(f.store.totals().bytes, 64);
+  assert.equal(
+    f.config.max_storage_gb * 1024 ** 3,
+    100,
+    "the user limit is unchanged",
+  );
+  const next = await f.event(3, { prepared: false });
+  assert.equal(
+    f.store.totals().bytes,
+    96,
+    "the next capture fits without waiting for another trim",
+  );
+  assert.equal(f.store.get(next.id).localOriginal, true);
+  assert.equal(f.store.totals().unavailableBytes, 0);
+});
+
 test("oldest verified originals and prepared copies rotate locally; ranged video/original and thumbnail remain readable", async (t) => {
   const f = await fixture(t, { limit: 100 }),
     old = await f.event(0),

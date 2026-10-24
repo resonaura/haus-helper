@@ -26,7 +26,15 @@ export class RecordingCache {
       this.config.max_storage_gb > 0
         ? this.config.max_storage_gb * 1024 ** 3
         : Infinity;
-    if (this.store.totals().bytes < limit) return 0;
+    // Rotation/verification runs asynchronously. Leave bounded space for new
+    // captures before the hard admission limit, instead of oscillating just
+    // below it and rejecting the next event until the following timer tick.
+    const headroom = Number.isFinite(limit)
+      ? Math.min(limit * 0.1, 512 * 1024 ** 2)
+      : 0;
+    const highWater = limit - headroom / 2;
+    const target = limit - headroom;
+    if (this.store.totals().bytes < highWater) return 0;
     let freed = 0;
     const cursor = this.cursor;
     const after = cursor ? " AND (start_at>? OR (start_at=? AND id>?))" : "";
@@ -46,7 +54,7 @@ export class RecordingCache {
         if (this.config.max_storage_gb !== policy) break;
         if (this.cluster.stopped) break;
         this.cursor = { at: start_at, id };
-        if (this.store.totals().bytes < limit) break;
+        if (this.store.totals().bytes < target) break;
         const release = this.store.evictMedia(id);
         if (!release) continue;
         const remotePins = [];
