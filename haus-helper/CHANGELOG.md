@@ -1,3 +1,8 @@
+# 0.3.27
+
+- Preserve the consistent SQLite catalog snapshot in Supervisor hot backups using a filename outside the live-database exclusion pattern. Restore that snapshot only when no live catalog exists, keep legacy snapshot compatibility, and clean temporary snapshots after a backup.
+- Include the Eufy configured-RTSP correction from 0.3.26 without changing camera transport settings or Aqara protected P2P sources.
+
 # 0.3.26
 
 - Restore NVR viewing, recording and pre-roll for Eufy cameras whose integration explicitly selects RTSP. Keep Aqara on its protected P2P restream, honor registered P2P sources for every vendor, and refuse stale RTSP endpoints when Eufy reports P2P or an unavailable provider. Camera transport settings remain unchanged.

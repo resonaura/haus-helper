@@ -1,12 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, mkdir, writeFile, stat } from "node:fs/promises";
+import { mkdtemp, rm, mkdir, writeFile, stat, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFile, spawn } from "node:child_process";
 import { Store } from "../lib/store.mjs";
 import { Backups, unseal } from "../lib/backups.mjs";
 import { SharedConfig } from "../lib/shared-config.mjs";
+import { CATALOG_SNAPSHOT, restoreCatalog } from "../lib/catalog-backup.mjs";
 import { promisify } from "node:util";
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "haus-backups-")),
@@ -78,7 +79,7 @@ test("ring pruning keeps 24 configuration snapshots and 7 HA backups; only Haus-
   assert.equal(backups.list().filter((b) => b.kind === "ha").length, 7);
   assert.deepEqual(deleted, ["/backups/owned-25"]);
 });
-test("hot backup hook captures a consistent committed database while the live WAL stays open", async (t) => {
+test("Supervisor hot backup exclusions preserve a restorable catalog while the live WAL stays open", async (t) => {
   const { root, store } = await fixture(t);
   const first = store.create("camera.fixture", "motion", 1000, 2000);
   const run = (arg) =>
@@ -92,17 +93,53 @@ test("hot backup hook captures a consistent committed database while the live WA
         code === 0 ? resolve() : reject(new Error("hook failed")),
       );
     });
+  const preferences = new SharedConfig(store).patch("0", {
+    favorites: ["light.narnia"],
+  });
   await run("pre");
-  const snapshot = new Store(
-    join(root, "restore", "haus.sqlite"),
-    join(root, "media"),
-  );
-  assert.equal(snapshot.get(first.id).cameraId, "camera.fixture");
-  snapshot.close();
   store.create("camera.fixture", "motion", 3000, 4000);
+  const archiveDirectory = await mkdtemp(join(tmpdir(), "haus-supervisor-"));
+  t.after(() => rm(archiveDirectory, { recursive: true, force: true }));
+  const archive = join(archiveDirectory, "addon.tar.gz");
+  const config = await readFile(new URL("../config.yaml", import.meta.url), "utf8");
+  const exclusions = config.match(/backup_exclude:\n((?:  - .*\n)+)/)[1]
+    .trim().split("\n").map((line) => JSON.parse(line.trim().slice(2)));
+  await promisify(execFile)("tar", [
+    "-czf", archive, ...exclusions.map((pattern) => "--exclude=" + pattern),
+    "-C", root, ".",
+  ]);
+  const names = (await promisify(execFile)("tar", ["-tf", archive])).stdout.split("\n");
+  assert.ok(names.includes("./restore/" + CATALOG_SNAPSHOT));
+  assert.ok(!names.some((name) => /^\.\/haus\.sqlite/.test(name)));
+  const restoredRoot = join(root, "recovered");
+  await mkdir(restoredRoot);
+  await promisify(execFile)("tar", ["-xzf", archive, "-C", restoredRoot]);
+  assert.equal(await restoreCatalog(restoredRoot), true);
+  const restored = new Store(join(restoredRoot, "haus.sqlite"), join(root, "media"));
+  try {
+    assert.equal(restored.get(first.id).cameraId, "camera.fixture");
+    assert.equal(restored.list().events.length, 1);
+    assert.deepEqual(new SharedConfig(restored).get(), preferences);
+    restored.create("camera.fixture", "motion", 5000, 6000);
+    assert.equal(await restoreCatalog(restoredRoot), false);
+    assert.equal(restored.list().events.length, 2);
+  } finally {
+    restored.close();
+  }
   await run("post");
   await assert.rejects(() => stat(join(root, "restore")));
   assert.equal(store.list().events.length, 2);
+});
+
+test("catalog restoration accepts legacy snapshots and never invents an absent backup", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "haus-legacy-catalog-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  assert.equal(await restoreCatalog(root), false);
+  await mkdir(join(root, "restore"));
+  const source = join(root, "restore", "haus.sqlite");
+  await writeFile(source, "legacy catalog");
+  assert.equal(await restoreCatalog(root), true);
+  assert.equal(await readFile(join(root, "haus.sqlite"), "utf8"), "legacy catalog");
 });
 
 test("failed automatic backups retain exponential cooldown across restarts; manual success clears it", async (t) => {
