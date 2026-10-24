@@ -1,3 +1,9 @@
+# 0.3.29
+
+- Rotate verified old HA cache copies slightly before the hard storage limit and leave bounded capture headroom (up to 512 MiB, or 10% of a smaller budget). New clips no longer repeatedly fill the last few megabytes and pause event admission until the next trim tick.
+- Preserve the exact user limit, explicit unlimited policies, originals on NVR, recovery metadata, active-reader leases and all archive verification requirements. An unavailable or unverified archive still cannot authorize local removal.
+- Reproduce the admission-boundary regression below the hard cap and verify that the next capture fits after rotation; retain the complete archive safety/restoration test suite.
+
 # 0.3.28
 
 - Reuse an already warm camera producer for preview, live viewers and recording even when a different node appears less loaded; fall back when the existing node is unavailable.
