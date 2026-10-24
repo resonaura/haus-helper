@@ -1,3 +1,7 @@
+# 0.3.35
+
+- Report the actual Home Assistant OS name without treating its kernel as the OS version. Inventory reported DRM render adapters, excluding display-only cards, using optional read-only kernel driver/compatible metadata. Preserve unknown model/type/memory, avoid private hardware identifiers and cache graphics inventory outside camera requests.
+
 # 0.3.34
 
 - Expose actual Home Assistant storage connection, removable and typed media information from the same Supervisor hardware inventory. Identify SD/MMC and explicit flash flags, preserve unknown types and omit private hardware identifiers. No mounts, device commands or recording policies change.
