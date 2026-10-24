@@ -1,3 +1,8 @@
+# 0.3.32
+
+- Let old local recordings reach background preparation even when the 64 newest pending clips fail repeatedly, belong to disabled cameras or are not yet admitted on a worker.
+- Persist bounded retry deadlines in the catalog, prefer unattempted recent footage, and remove bookkeeping for prepared/archived/expired clips. Restarting the controller no longer immediately retries the same failed clip. Keep foreground priority, one remote task, weak-node admission and original media intact.
+
 # 0.3.31
 
 - Let the small encrypted recovery catalog complete while a full Home Assistant archive is pending. Verified cache rotation no longer waits for a long Supervisor backup and fills the recent-video budget in the meantime.
