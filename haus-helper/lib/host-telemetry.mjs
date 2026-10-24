@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { readFile, statfs } from "node:fs/promises";
+import { homeAssistantDisks } from "./host-disks.mjs";
 
 const nullableNumber = (value) =>
   Number.isFinite(value) && value >= 0 ? value : null;
@@ -59,8 +60,11 @@ const container = (id, name, info, stats, state = "running") => ({
 });
 
 export class HostTelemetry {
-  constructor(config, { fetcher = fetch, read = readFile } = {}) {
-    Object.assign(this, { config, fetcher, read });
+  constructor(
+    config,
+    { fetcher = fetch, read = readFile, filesystem = statfs } = {},
+  ) {
+    Object.assign(this, { config, fetcher, read, filesystem });
     this.appStats = new Map();
     this.cpuSamples = new Map();
     this.appCursor = 0;
@@ -121,7 +125,17 @@ export class HostTelemetry {
   }
   async collect(at) {
     this.deadline = Date.now() + 2500;
-    const [info, core, stats, apps, diskInfo, files] = await Promise.all([
+    const [
+      info,
+      core,
+      stats,
+      apps,
+      diskInfo,
+      files,
+      hardware,
+      mountinfo,
+      mediaFilesystem,
+    ] = await Promise.all([
       this.supervisor("/host/info"),
       this.supervisor("/core/info"),
       this.stats("/core/stats"),
@@ -134,6 +148,9 @@ export class HostTelemetry {
               this.read(`/proc/${name}`, "utf8"),
             ),
           ).catch(() => null),
+      this.supervisor("/hardware/info"),
+      this.read("/proc/self/mountinfo", "utf8").catch(() => ""),
+      this.filesystem(this.config.media).catch(() => null),
     ]);
     const proc = files ? parseHostProc(...files) : null;
     let cpuUsage = null;
@@ -152,53 +169,14 @@ export class HostTelemetry {
         ),
       );
     this.previousCpu = proc?.cpuTimes;
-    const disks = [];
-    if (Number.isFinite(info?.disk_total))
-      disks.push({
-        id: "ha-data",
-        name: "Home Assistant data",
-        kind: "volume",
-        parentId: null,
-        mountpoint: null,
-        filesystem: null,
-        totalBytes: Math.round(info.disk_total * 1024 ** 3),
-        usedBytes: Number.isFinite(info.disk_used)
-          ? Math.round(info.disk_used * 1024 ** 3)
-          : null,
-        availableBytes: Number.isFinite(info.disk_free)
-          ? Math.round(info.disk_free * 1024 ** 3)
-          : null,
-        scope: "host",
-      });
-    for (const disk of (diskInfo?.disks ?? []).slice(0, 32)) {
-      const id = text(disk.id ?? disk.name);
-      if (!id) continue;
-      disks.push({
-        id,
-        name: text(disk.model ?? disk.name, "Disk"),
-        kind: "disk",
-        parentId: null,
-        mountpoint: null,
-        filesystem: null,
-        totalBytes: nullableNumber(disk.size),
-        usedBytes: null,
-        availableBytes: null,
-        scope: "host",
-      });
-      for (const part of (disk.partitions ?? []).slice(0, 32))
-        disks.push({
-          id: text(part.uuid ?? part.device, `${id}-volume`),
-          name: text(part.label ?? part.device, "Volume"),
-          kind: "volume",
-          parentId: id,
-          mountpoint: null,
-          filesystem: text(part.filesystem),
-          totalBytes: nullableNumber(part.size),
-          usedBytes: null,
-          availableBytes: null,
-          scope: "host",
-        });
-    }
+    const disks = homeAssistantDisks({
+      hardware,
+      diskInfo,
+      hostInfo: info,
+      media: this.config.media,
+      mountinfo,
+      mediaFilesystem,
+    });
     const containers = core
       ? [
           container(

@@ -25,7 +25,7 @@ export class Servers {
       filesystem,
       now,
     });
-    this.telemetry = new HostTelemetry(config, { fetcher, read });
+    this.telemetry = new HostTelemetry(config, { fetcher, read, filesystem });
     store.db.exec(
       "CREATE TABLE IF NOT EXISTS service_policy (id TEXT PRIMARY KEY,value TEXT NOT NULL)",
     );
