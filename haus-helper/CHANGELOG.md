@@ -1,3 +1,8 @@
+# 0.3.33
+
+- Build the Home Assistant disk hierarchy from Supervisor's actual hardware/udev inventory when the simpler host disk list is empty. Preserve physical-device parents, all reported partitions (including boot state), filesystem types, mount aliases and partition purpose without exposing serial numbers or guessing a fixed HA OS layout.
+- Attach exact data-filesystem usage only after matching the media mount's kernel device number to its actual partition. Keep unrelated/unmounted usage unknown, avoid duplicate rounded host totals, and retain the older capability fallback. Collection remains read-only and uses the existing bounded telemetry refresh.
+
 # 0.3.32
 
 - Let old local recordings reach background preparation even when the 64 newest pending clips fail repeatedly, belong to disabled cameras or are not yet admitted on a worker.
