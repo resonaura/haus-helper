@@ -1,3 +1,7 @@
+# 0.3.34
+
+- Expose actual Home Assistant storage connection, removable and typed media information from the same Supervisor hardware inventory. Identify SD/MMC and explicit flash flags, preserve unknown types and omit private hardware identifiers. No mounts, device commands or recording policies change.
+
 # 0.3.33
 
 - Build the Home Assistant disk hierarchy from Supervisor's actual hardware/udev inventory when the simpler host disk list is empty. Preserve physical-device parents, all reported partitions (including boot state), filesystem types, mount aliases and partition purpose without exposing serial numbers or guessing a fixed HA OS layout.
