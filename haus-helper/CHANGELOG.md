@@ -1,3 +1,7 @@
+# 0.3.26
+
+- Restore NVR viewing, recording and pre-roll for Eufy cameras whose integration explicitly selects RTSP. Keep Aqara on its protected P2P restream, honor registered P2P sources for every vendor, and refuse stale RTSP endpoints when Eufy reports P2P or an unavailable provider. Camera transport settings remain unchanged.
+
 # 0.3.25
 
 - Keep enabled camera RTSP sessions warm on capable NVR nodes for recording and pre-roll. Reuse the same NVR-owned producer for WebRTC viewing, honor camera preview leases, distribute session starts by node capacity, and preserve Aqara/Eufy P2P restream sources without routing media through Home Assistant.
