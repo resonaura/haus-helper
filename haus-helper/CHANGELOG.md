@@ -1,3 +1,8 @@
+# 0.3.30
+
+- Diagnose rejected NVR recording submissions separately from finalization/import failures, with event and camera correlation and bounded retry logging.
+- Preserve only allowlisted node error codes and HTTP status. Limit diagnostic response bodies to 4 KiB, never retain remote messages/source URLs, and keep capture errors and cleanup authoritative when logging fails.
+
 # 0.3.29
 
 - Rotate verified old HA cache copies slightly before the hard storage limit and leave bounded capture headroom (up to 512 MiB, or 10% of a smaller budget). New clips no longer repeatedly fill the last few megabytes and pause event admission until the next trim tick.
