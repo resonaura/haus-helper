@@ -166,6 +166,104 @@ test("only explicit protected P2P telemetry selects Aqara, never native RTSP, un
     /source_unavailable/,
   );
 });
+test("Eufy keeps its explicitly configured RTSP route and never bypasses a registered P2P route", () => {
+  const eufy = {
+    ...camera,
+    aliases: ["camera.garden_internal"],
+    deviceIds: ["eufy-camera"],
+    playbackSource: {
+      platform: "eufy_security",
+      manufacturer: "Eufy Security",
+      model: "T8410C",
+    },
+  };
+  const native = {
+    entity_id: "sensor.garden_rtsp_stream_url",
+    state: "rtsp://user:private@192.168.4.22/live",
+  };
+  const entry = { entity_id: native.entity_id, device_id: "eufy-camera" };
+  const provider = { entity_id: "sensor.garden_stream_provider", state: "RTSP" };
+  assert.deepEqual(
+    nvrCameraSource(eufy, { states: [native, provider], entities: [entry] }),
+    { kind: "rtsp", url: native.state },
+  );
+  assert.deepEqual(
+    nvrCameraSource(eufy, {
+      states: [native, { ...provider, state: "P2P" }, state("rtsp://192.168.4.44/p2p")],
+      entities: [entry],
+    }),
+    { kind: "p2p-restream", url: "rtsp://192.168.4.44/p2p" },
+  );
+  for (const registry of [
+    { states: [native, provider, state("unavailable")], entities: [entry] },
+    {
+      states: [native, provider],
+      entities: [
+        entry,
+        { entity_id: state("").entity_id, disabled_by: "user" },
+      ],
+    },
+    { states: [native, provider], entities: [{ ...entry, disabled_by: "user" }] },
+    {
+      states: [{ ...native, entity_id: "sensor.neighbor_rtsp_stream_url" }, provider],
+      entities: [],
+    },
+    { states: [{ ...native, state: "rtsp://8.8.8.8/live" }, provider], entities: [entry] },
+  ])
+    assert.throws(() => nvrCameraSource(eufy, registry), /source_unavailable/);
+  assert.throws(
+    () => nvrCameraSource(eufy, {
+      states: [{ ...native, state: "rtsp://127.0.0.1/live" }, provider],
+      entities: [entry],
+    }),
+    /not_reachable/,
+  );
+  for (const providers of [
+    [],
+    [{ ...provider, state: "P2P" }],
+    [{ ...provider, state: "unavailable" }],
+    [{ ...provider, entity_id: "sensor.neighbor_stream_provider" }],
+  ])
+    assert.throws(
+      () => nvrCameraSource(eufy, { states: [native, ...providers], entities: [entry] }),
+      /protected_p2p/,
+    );
+  assert.throws(
+    () => nvrCameraSource(eufy, {
+      states: [native, provider],
+      entities: [entry, { entity_id: provider.entity_id, disabled_by: "user" }],
+    }),
+    /protected_p2p/,
+  );
+});
+test("Eufy configured RTSP reaches an NVR without changing camera transport or exposing its source", async (t) => {
+  const { sessions, registry, calls } = await fixture(t);
+  registry.cameras[0].playbackSource = {
+    platform: "eufy_security",
+    manufacturer: "Eufy Security",
+    model: "T8410C",
+  };
+  registry.cameras[0].aliases = ["camera.garden_internal"];
+  registry.states = [
+    {
+      entity_id: "sensor.garden_rtsp_stream_url",
+      state: "rtsp://user:private@192.168.4.22/live",
+    },
+    { entity_id: "sensor.garden_stream_provider", state: "RTSP" },
+  ];
+  const result = await sessions.touch(registry.cameras[0], owner, true);
+  assert.equal(result.warm, true);
+  assert.equal(result.transport, "nvr-webrtc");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].path, "/v1/cameras/sessions");
+  assert.deepEqual(calls[0].data.source, {
+    kind: "rtsp",
+    url: registry.states[0].state,
+  });
+  assert.equal(calls[0].data.requireAudio, true);
+  assert.ok(!JSON.stringify(result).includes("rtsp:"));
+  assert.ok(!JSON.stringify(result).includes("private"));
+});
 test("least-loaded capable node receives exact source privately and warm response never includes credentials", async (t) => {
   const { sessions, calls } = await fixture(t);
   const result = await sessions.touch(camera, owner, true, true);

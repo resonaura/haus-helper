@@ -6,8 +6,7 @@ import { Motion } from "./motion.mjs";
 import { SharedConfig } from "./shared-config.mjs";
 import { Backups } from "./backups.mjs";
 import { Cluster } from "./cluster.mjs";
-import { copyFile } from "node:fs/promises";
-import { constants } from "node:fs";
+import { restoreCatalog } from "./catalog-backup.mjs";
 import { join } from "node:path";
 import { loadConfig } from "./config.mjs";
 import { HaClient } from "./ha-client.mjs";
@@ -21,15 +20,7 @@ import {
 import { createApi } from "./server.mjs";
 const config = await loadConfig();
 await prepareDirectories(config);
-try {
-  await copyFile(
-    join(config.data, "restore", "haus.sqlite"),
-    join(config.data, "haus.sqlite"),
-    constants.COPYFILE_EXCL,
-  );
-} catch (error) {
-  if (!["ENOENT", "EEXIST"].includes(error.code)) throw error;
-}
+await restoreCatalog(config.data);
 const store = new Store(join(config.data, "haus.sqlite"), config.media);
 const ha = new HaClient(config);
 const backups = new Backups(config, store);

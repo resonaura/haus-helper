@@ -1,6 +1,7 @@
 import { DatabaseSync, backup } from "node:sqlite";
 import { mkdir, rm, rename } from "node:fs/promises";
 import { join } from "node:path";
+import { CATALOG_SNAPSHOT } from "./catalog-backup.mjs";
 const root = process.env.HAUS_DATA || "/data",
   directory = join(root, "restore");
 if (process.argv[2] === "post")
@@ -11,10 +12,10 @@ else {
     readOnly: true,
   });
   try {
-    const temporary = join(directory, "haus.partial.sqlite");
+    const temporary = join(directory, "catalog.partial.sqlite");
     await rm(temporary, { force: true });
     await backup(database, temporary);
-    await rename(temporary, join(directory, "haus.sqlite"));
+    await rename(temporary, join(directory, CATALOG_SNAPSHOT));
   } finally {
     database.close();
   }
