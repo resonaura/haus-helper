@@ -1,3 +1,9 @@
+# 0.3.28
+
+- Reuse an already warm camera producer for preview, live viewers and recording even when a different node appears less loaded; fall back when the existing node is unavailable.
+- Serialize simultaneous camera acquisitions across owners to prevent preview, recording and viewer requests from racing onto different nodes.
+- Revalidate a viewer owner's cached producer lease before negotiation so a restarted NVR is reopened or replaced instead of failing the first camera open.
+
 # 0.3.27
 
 - Preserve the consistent SQLite catalog snapshot in Supervisor hot backups using a filename outside the live-database exclusion pattern. Restore that snapshot only when no live catalog exists, keep legacy snapshot compatibility, and clean temporary snapshots after a backup.

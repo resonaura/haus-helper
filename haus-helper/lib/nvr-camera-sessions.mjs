@@ -107,6 +107,7 @@ export class NvrCameraSessions {
     this.entries = new Map();
     this.revisions = new Map();
     this.pending = new Map();
+    this.cameraPending = new Map();
     this.nodeReservations = new Map();
     this.viewers = new Map();
     this.closedViewers = new Map();
@@ -236,7 +237,7 @@ export class NvrCameraSessions {
         void this.release(entry.cameraId, entry.owner);
     void this.tick().catch(() => {});
   }
-  async ensure(camera, owner, preview = false, preferredNode) {
+  async ensure(camera, owner, preview = false, preferredNode, refresh = false) {
     if (this.stopped) throw missing("camera_sessions_stopped");
     if (!ownerId(owner)) throw missing("invalid_warm_session");
     if (!camera?.available) throw missing("camera_unavailable");
@@ -250,24 +251,45 @@ export class NvrCameraSessions {
       await prior.catch(() => {});
       if ((this.revisions.get(key) ?? 0) !== revision)
         throw missing("camera_session_cancelled");
-      return this.ensure(camera, owner, preview, preferredNode);
+      return this.ensure(camera, owner, preview, preferredNode, refresh);
     }
-    const task = this.acquire(
-      camera,
-      owner,
-      source,
-      key,
-      preferredNode,
-      revision,
-    );
+    // Serialize acquisition per camera, not just per owner. A recording,
+    // dashboard and viewer can arrive together before the first producer is
+    // registered; later owners must see that producer before choosing a node.
+    const priorCamera = this.cameraPending.get(camera.id);
+    const task = (async () => {
+      await priorCamera?.catch(() => {});
+      if (this.stopped || (this.revisions.get(key) ?? 0) !== revision)
+        throw missing("camera_session_cancelled");
+      return this.acquire(
+        camera,
+        owner,
+        source,
+        key,
+        preferredNode,
+        revision,
+        refresh,
+      );
+    })();
+    this.cameraPending.set(camera.id, task);
     this.pending.set(key, task);
     try {
       return await task;
     } finally {
       if (this.pending.get(key) === task) this.pending.delete(key);
+      if (this.cameraPending.get(camera.id) === task)
+        this.cameraPending.delete(camera.id);
     }
   }
-  async acquire(camera, owner, source, key, preferredNode, revision) {
+  async acquire(
+    camera,
+    owner,
+    source,
+    key,
+    preferredNode,
+    revision,
+    refresh = false,
+  ) {
     const old = this.entries.get(key);
     const fingerprint = createHash("sha256")
       .update(JSON.stringify(source))
@@ -275,8 +297,9 @@ export class NvrCameraSessions {
     if (old && old.fingerprint === fingerprint && this.validNode(old.node)) {
       old.until = this.now() + 60000;
       if (
+        !refresh &&
         this.now() - old.renewedAt <
-        (owner === this.recordingOwner ? 3000 : 15000)
+          (owner === this.recordingOwner ? 3000 : 15000)
       )
         return old;
       try {
@@ -318,8 +341,14 @@ export class NvrCameraSessions {
         this.validNode(entry.node) &&
         (!preferredNode || entry.node.id === preferredNode.id),
     );
-    if (shared && !choices.some((node) => node.id === shared.node.id))
+    if (shared) {
+      // Attaching another owner to a healthy producer consumes no new source
+      // slot. Prefer it even when another node currently looks less loaded.
+      // Otherwise previews/viewers duplicate the camera's P2P reader remotely.
+      const index = choices.findIndex((node) => node.id === shared.node.id);
+      if (index >= 0) choices.splice(index, 1);
       choices.unshift(shared.node);
+    }
     if (
       old &&
       this.validNode(old.node) &&
@@ -448,7 +477,10 @@ export class NvrCameraSessions {
     if (this.viewers.has(key)) throw missing("camera_viewer_exists");
     if (this.viewers.size >= 64) throw missing("camera_viewer_busy");
     const task = (async () => {
-      const entry = await this.ensure(camera, owner);
+      // A node can restart while the short warm-lease cache is still fresh.
+      // Confirm its producer exists before sending a browser offer, allowing
+      // ensure() to reopen/fail over rather than fail the first camera open.
+      const entry = await this.ensure(camera, owner, false, undefined, true);
       const result = await this.json(
         entry.node,
         `/v1/cameras/sessions/${entry.id}/webrtc`,
