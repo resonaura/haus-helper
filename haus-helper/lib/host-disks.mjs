@@ -1,3 +1,5 @@
+import { storageMedia } from "./storage-media.mjs";
+
 const rows = (value) => (Array.isArray(value) ? value : []);
 const text = (value, fallback = null) =>
   typeof value === "string"
@@ -122,6 +124,11 @@ export function homeAssistantDisks({
       usedBytes: null,
       availableBytes: null,
       scope: "host",
+      ...storageMedia({
+        transport: drive.connection_bus,
+        removable: drive.removable,
+        attributes: parent.attributes,
+      }),
     });
     const partitions = devices
       .filter(

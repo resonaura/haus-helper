@@ -36,6 +36,8 @@ const fixture = () => ({
           MAJOR: "179",
           MINOR: "0",
           ID_SERIAL: "private",
+          ID_DRIVE_FLASH_SD: "1",
+          MMC_TYPE: "SD",
         },
       },
       ...[
@@ -78,6 +80,8 @@ test("joins real udev parents with HA hardware filesystems and retains non-files
   const disks = homeAssistantDisks(fixture());
   assert.equal(disks.filter((d) => d.type === "disk").length, 1);
   assert.equal(disks[0].physical, true);
+  assert.equal(disks[0].transport, "sdio");
+  assert.equal(disks[0].mediaKind, "sd");
   assert.equal(disks[0].totalBytes, 128000000000);
   const efi = disks.find((d) => d.name === "hassos-boot");
   assert.equal(efi.partitionRole, "efi");
@@ -180,5 +184,28 @@ test("older/denied hardware capability retains the actual fallback without inven
   assert.equal(
     homeAssistantDisks(input).find((d) => d.partitionRole === "efi").totalBytes,
     33554432,
+  );
+});
+
+test("HA USB media stays unknown without explicit flags and a disconnected drive disappears", () => {
+  const input = fixture();
+  const drive = input.hardware.drives[0];
+  const root = input.hardware.devices[0];
+  drive.connection_bus = "usb";
+  drive.removable = true;
+  delete root.attributes.ID_DRIVE_FLASH_SD;
+  delete root.attributes.MMC_TYPE;
+  let disks = homeAssistantDisks(input);
+  assert.equal(disks[0].transport, "usb");
+  assert.equal(disks[0].removable, true);
+  assert.equal(disks[0].mediaKind, undefined);
+  root.attributes.ID_DRIVE_THUMB = "1";
+  disks = homeAssistantDisks(input);
+  assert.equal(disks[0].mediaKind, "flash");
+  input.hardware.drives = [];
+  input.hardware.devices = [];
+  assert.equal(
+    homeAssistantDisks(input).some((d) => d.id.startsWith("ha-disk:")),
+    false,
   );
 });
