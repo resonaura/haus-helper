@@ -20,7 +20,10 @@ export async function archiveRecovery(cluster) {
       const retry = cluster.store.db
         .prepare("SELECT next_at FROM haus_backup_retries WHERE kind='haus'")
         .get();
-      if (cluster.backups.busy || retry?.next_at > Date.now()) return null;
+      const busy = cluster.backups.canSnapshot
+        ? !cluster.backups.canSnapshot("haus")
+        : cluster.backups.busy;
+      if (busy || retry?.next_at > Date.now()) return null;
       item = await cluster.backups.snapshot("haus");
     }
     if (!item || item.archiveGeneration < generation) return null;

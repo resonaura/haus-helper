@@ -621,6 +621,36 @@ test("diagnostic failures do not hide the original capture error or retain pendi
   assert.equal(sessions.eventPending.size, 0);
   assert.equal(sessions.events.size, 0);
 });
+test("a rejected storage reservation is reported as capacity, not corrupted media", async (t) => {
+  const { sessions, store, config } = await fixture(t, {
+    log: () => {},
+    json: async (_node, path) => {
+      if (path.endsWith("/recordings"))
+        throw Object.assign(Error("Node returned 507"), {
+          code: "storage_full",
+          status: 507,
+        });
+      return session;
+    },
+  });
+  const recorder = new Recorder(config, {}, store, undefined, {
+    capture: sessions,
+  });
+  t.after(() => recorder.stop());
+  sessions.sync([camera]);
+  const event = store.create(
+    camera.id,
+    "motion",
+    Date.now(),
+    Date.now() + 1000,
+  );
+  await recorder.finish(event);
+  assert.equal(store.get(event.id).status, "failed");
+  assert.equal(
+    store.get(event.id).error,
+    "Free space on your recording server and try again.",
+  );
+});
 test("verified NVR MP4 imports actual pre-roll/audio and ACKs only after catalog persistence", async (t) => {
   const sourceRoot = await mkdtemp(join(tmpdir(), "haus-nvr-recording-"));
   t.after(() => rm(sourceRoot, { recursive: true, force: true }));

@@ -6,6 +6,8 @@ Haus discovers cameras and their motion, person, pet, vehicle and doorbell detec
 
 NVR capture diagnostics correlate event/camera IDs and distinguish submission from finalization failures. Only known machine codes and HTTP status enter logs; arbitrary remote messages and source URLs are excluded. Repeated identical failures are rate limited and diagnostic failures cannot change capture cleanup.
 
+Encrypted Haus catalog snapshots and full Home Assistant backups have independent bounded tasks. A slow Supervisor archive cannot block the verified catalog needed for local-video rotation. Each kind retains its own cooldown, retention queue and failure state; only one snapshot of each kind can run, and shutdown cancels and awaits both.
+
 ## Install
 
 Add `https://github.com/resonaura/haus-helper` to **Settings → Apps → App store → Repositories**, install **Haus**, and start it. On earlier Home Assistant versions these pages are named **Add-ons**. Open its web interface, or open a camera in the Haus desktop app.

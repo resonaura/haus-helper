@@ -767,15 +767,48 @@ test("missing or unverifiable recovery metadata keeps original and playback loca
     item = await f.event(0);
   await archiveEvent(f.cluster, item.id);
   f.config.max_storage_gb = 1 / 1024 ** 3;
-  f.backups.busy = true;
+  const canSnapshot = f.backups.canSnapshot.bind(f.backups);
+  f.backups.canSnapshot = () => false;
   assert.equal(await f.cluster.recordingCache.trim(), 0);
-  f.backups.busy = false;
+  f.backups.canSnapshot = canSnapshot;
   f.setVerification("backup-unverified");
   assert.equal(await f.cluster.recordingCache.trim(), 0);
   assert.equal(f.store.get(item.id).localOriginal, true);
   f.setVerification("valid");
   assert.equal(await f.cluster.recordingCache.trim(), 64);
   assert.equal(f.store.get(item.id).localOriginal, false);
+});
+
+test("an in-progress HA backup cannot block a verified catalog snapshot and cache rotation", async (t) => {
+  const f = await fixture(t, { limit: 1 });
+  const item = await f.event(0);
+  await archiveEvent(f.cluster, item.id);
+  f.backups.config.standalone = false;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  f.backups.supervisor = async (path, init) => {
+    if (init?.method === "POST")
+      return Response.json({ result: "ok", data: { slug: "owned-slow-ha" } });
+    await gate;
+    return new Response("ha-fixture");
+  };
+  const slow = f.backups.snapshot("ha");
+  try {
+    assert.equal(f.backups.busy, true);
+    assert.equal(await f.cluster.recordingCache.trim(), 64);
+    assert.equal(f.store.get(item.id).localOriginal, false);
+    assert.equal(f.backups.busy, true, "the HA backup must remain active");
+    const catalog = f.backups.list().find((b) => b.kind === "haus");
+    assert.ok(catalog.archiveGeneration >= f.store.archiveGeneration());
+    assert.ok(f.blobs.has(catalog.digest));
+    assert.ok(f.blobs.has(digest(item.original)));
+    assert.ok(f.blobs.has(digest(item.playback)));
+  } finally {
+    release();
+    await slow;
+  }
 });
 
 test("a changed archive map revokes a pending eviction until its newer recovery snapshot is verified", async (t) => {

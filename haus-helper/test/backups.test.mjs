@@ -1,6 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, mkdir, writeFile, stat, readFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  rm,
+  mkdir,
+  writeFile,
+  stat,
+  readFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFile, spawn } from "node:child_process";
@@ -55,6 +62,95 @@ test("encrypted configuration snapshots preserve server names and room assignmen
     restored.close();
   }
 });
+
+test("configuration and HA snapshots run independently with one bounded task per kind", async (t) => {
+  const { backups } = await fixture(t);
+  backups.config.standalone = false;
+  let release, entered;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const downloading = new Promise((resolve) => {
+    entered = resolve;
+  });
+  backups.supervisor = async (_path, init) => {
+    if (init?.method === "POST")
+      return Response.json({
+        result: "ok",
+        data: { slug: "owned-parallel-ha" },
+      });
+    entered();
+    await gate;
+    return new Response("ha-fixture");
+  };
+  const slow = backups.snapshot("ha");
+  try {
+    await downloading;
+    const config = backups.snapshot("haus");
+    await assert.rejects(backups.snapshot("haus"), /backup_busy/);
+    await assert.rejects(backups.snapshot("ha"), /backup_busy/);
+    const result = await config;
+    assert.equal(result.kind, "haus");
+    assert.equal(backups.busy, true);
+    assert.equal(backups.canSnapshot("haus"), true);
+    assert.equal(backups.canSnapshot("ha"), false);
+  } finally {
+    release();
+    await slow;
+  }
+  assert.equal(backups.busy, false);
+  assert.equal(backups.list().length, 2);
+});
+
+test("a successful configuration snapshot cannot hide an independent HA backup failure", async (t) => {
+  const { backups } = await fixture(t);
+  backups.config.standalone = false;
+  backups.supervisor = async () => {
+    throw Error("supervisor_busy");
+  };
+  await assert.rejects(backups.snapshot("ha"), /supervisor_busy/);
+  const failure = backups.error;
+  assert.match(failure, /Home Assistant backup/);
+  await backups.snapshot("haus");
+  assert.equal(backups.error, failure);
+});
+
+test("slow HA retention cannot hold configuration snapshot completion", async (t) => {
+  const { backups, store } = await fixture(t);
+  backups.config.standalone = false;
+  for (let i = 0; i < 8; i++) {
+    const digest = i.toString(16).padStart(64, "0");
+    await writeFile(backups.path(digest), "fixture");
+    store.db
+      .prepare(
+        "INSERT INTO haus_backups(digest,kind,created_at,bytes,ha_slug)VALUES(?,?,?,?,?)",
+      )
+      .run(digest, "ha", i, 7, "owned-" + i);
+  }
+  let release, entered;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const deleting = new Promise((resolve) => {
+    entered = resolve;
+  });
+  backups.supervisor = async (_path, init) => {
+    assert.equal(init.method, "DELETE");
+    entered();
+    await gate;
+    return new Response("{}");
+  };
+  const retention = backups.prune("ha");
+  try {
+    await deleting;
+    const result = await backups.snapshot("haus");
+    assert.equal(result.kind, "haus");
+  } finally {
+    release();
+    await retention;
+  }
+  assert.equal(backups.list().filter((i) => i.kind === "ha").length, 7);
+});
 test("ring pruning keeps 24 configuration snapshots and 7 HA backups; only Haus-owned slugs are deleted", async (t) => {
   const { store, backups } = await fixture(t);
   const deleted = [];
@@ -101,21 +197,36 @@ test("Supervisor hot backup exclusions preserve a restorable catalog while the l
   const archiveDirectory = await mkdtemp(join(tmpdir(), "haus-supervisor-"));
   t.after(() => rm(archiveDirectory, { recursive: true, force: true }));
   const archive = join(archiveDirectory, "addon.tar.gz");
-  const config = await readFile(new URL("../config.yaml", import.meta.url), "utf8");
-  const exclusions = config.match(/backup_exclude:\n((?:  - .*\n)+)/)[1]
-    .trim().split("\n").map((line) => JSON.parse(line.trim().slice(2)));
+  const config = await readFile(
+    new URL("../config.yaml", import.meta.url),
+    "utf8",
+  );
+  const exclusions = config
+    .match(/backup_exclude:\n((?:  - .*\n)+)/)[1]
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line.trim().slice(2)));
   await promisify(execFile)("tar", [
-    "-czf", archive, ...exclusions.map((pattern) => "--exclude=" + pattern),
-    "-C", root, ".",
+    "-czf",
+    archive,
+    ...exclusions.map((pattern) => "--exclude=" + pattern),
+    "-C",
+    root,
+    ".",
   ]);
-  const names = (await promisify(execFile)("tar", ["-tf", archive])).stdout.split("\n");
+  const names = (
+    await promisify(execFile)("tar", ["-tf", archive])
+  ).stdout.split("\n");
   assert.ok(names.includes("./restore/" + CATALOG_SNAPSHOT));
   assert.ok(!names.some((name) => /^\.\/haus\.sqlite/.test(name)));
   const restoredRoot = join(root, "recovered");
   await mkdir(restoredRoot);
   await promisify(execFile)("tar", ["-xzf", archive, "-C", restoredRoot]);
   assert.equal(await restoreCatalog(restoredRoot), true);
-  const restored = new Store(join(restoredRoot, "haus.sqlite"), join(root, "media"));
+  const restored = new Store(
+    join(restoredRoot, "haus.sqlite"),
+    join(root, "media"),
+  );
   try {
     assert.equal(restored.get(first.id).cameraId, "camera.fixture");
     assert.equal(restored.list().events.length, 1);
@@ -139,7 +250,10 @@ test("catalog restoration accepts legacy snapshots and never invents an absent b
   const source = join(root, "restore", "haus.sqlite");
   await writeFile(source, "legacy catalog");
   assert.equal(await restoreCatalog(root), true);
-  assert.equal(await readFile(join(root, "haus.sqlite"), "utf8"), "legacy catalog");
+  assert.equal(
+    await readFile(join(root, "haus.sqlite"), "utf8"),
+    "legacy catalog",
+  );
 });
 
 test("failed automatic backups retain exponential cooldown across restarts; manual success clears it", async (t) => {
