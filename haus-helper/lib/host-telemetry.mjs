@@ -1,5 +1,6 @@
 import { readFile, statfs } from "node:fs/promises";
 import { homeAssistantDisks } from "./host-disks.mjs";
+import { homeAssistantGraphics } from "./host-gpus.mjs";
 
 const nullableNumber = (value) =>
   Number.isFinite(value) && value >= 0 ? value : null;
@@ -230,12 +231,21 @@ export class HostTelemetry {
       info?.boot_timestamp > 0
         ? Math.max(0, at / 1000 - info.boot_timestamp / 1000000)
         : null;
+    if (this.graphicsAt === undefined || at - this.graphicsAt >= 60000) {
+      this.graphicsAt = at;
+      this.graphics = await homeAssistantGraphics(hardware, {
+        read: this.read,
+        now: () => at,
+      });
+    }
     const host = {
       sampledAt: new Date(at).toISOString(),
       scope: "host",
       source: files ? "linux-proc-and-supervisor" : "supervisor",
       hostname: text(info?.hostname),
       platform: text(info?.operating_system),
+      osName: text(info?.operating_system),
+      gpus: this.graphics,
       release: text(info?.kernel),
       arch: text(core?.arch),
       uptimeSeconds: proc?.uptimeSeconds ?? boot,
