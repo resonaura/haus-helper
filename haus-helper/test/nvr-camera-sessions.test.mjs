@@ -114,6 +114,103 @@ async function fixture(t, overrides = {}) {
     sessions,
   };
 }
+test("simultaneous owners open one shared producer without racing onto separate nodes", async (t) => {
+  const firstStarted = Promise.withResolvers();
+  const releaseFirst = Promise.withResolvers();
+  const calls = [];
+  const { sessions, cluster } = await fixture(t, {
+    json: async (node) => {
+      calls.push(node.id);
+      if (calls.length === 1) {
+        firstStarted.resolve();
+        await releaseFirst.promise;
+      }
+      return session;
+    },
+  });
+  for (const health of cluster.health.values()) {
+    health.remote.rtspSessions.active = 0;
+    health.remote.rtspSessions.max = 1;
+  }
+  const first = sessions.touch(camera, owner, true);
+  await firstStarted.promise;
+  const second = sessions.touch(camera, owner + "-viewer", true);
+  await new Promise((resolve) => setImmediate(resolve));
+  releaseFirst.resolve();
+  assert.deepEqual(
+    (await Promise.all([first, second])).map((r) => r.warm),
+    [true, true],
+  );
+  assert.deepEqual(
+    calls,
+    ["a", "a"],
+    "join the first producer, including when that node has no spare source slots",
+  );
+});
+
+test("new owners reuse the warm camera producer even when another node is less loaded", async (t) => {
+  const { sessions, cluster, calls } = await fixture(t);
+  assert.equal((await sessions.touch(camera, owner, true)).warm, true);
+  assert.equal(calls.at(-1).node, "b");
+  cluster.health.get("a").remote.rtspSessions.active = 0;
+  cluster.health.get("b").remote.rtspSessions.active = 1;
+  assert.equal(
+    (await sessions.touch(camera, owner + "-viewer", true)).warm,
+    true,
+  );
+  assert.equal(
+    calls.at(-1).node,
+    "b",
+    "attach the owner to the existing producer rather than open a duplicate on the freer node",
+  );
+  cluster.health.get("b").online = false;
+  assert.equal(
+    (await sessions.touch(camera, owner + "-replacement", true)).warm,
+    true,
+  );
+  assert.equal(
+    calls.at(-1).node,
+    "a",
+    "an offline producer still fails over to a healthy node",
+  );
+});
+
+test("a viewer revalidates a recent warm lease and recreates a producer after node restart", async (t) => {
+  const ids = [randomUUID(), randomUUID()];
+  let generation = 0;
+  const calls = [];
+  const { sessions } = await fixture(t, {
+    json: async (node, path, options) => {
+      calls.push({ node: node.id, path, ...options });
+      if (path === "/v1/cameras/sessions")
+        return { ...session, id: ids[generation] };
+      if (path.endsWith("/lease")) {
+        if (!path.includes(ids[generation]))
+          throw Error("camera_session_not_found");
+        return { ...session, id: ids[generation] };
+      }
+      if (path.endsWith("/webrtc")) {
+        if (!path.includes(ids[generation]))
+          throw Error("camera_session_not_found");
+        return {
+          viewerId: randomUUID(),
+          answer: { type: "answer", sdp: "v=0\r\n" },
+        };
+      }
+      throw Error("unexpected_node_operation");
+    },
+  });
+  await sessions.touch(camera, owner, true);
+  generation = 1; // The node restarted immediately after the successful preheat.
+  const viewer = await sessions.viewer(camera, owner, randomUUID(), "v=0\r\n");
+  assert.equal(viewer.answer.type, "answer");
+  assert.ok(
+    calls.some((call) => call.path.endsWith("/lease")),
+    "camera opening must not trust a cached session UUID after a restart",
+  );
+  assert.equal(sessions.entries.get(`${camera.id}:${owner}`).id, ids[1]);
+});
+
 test("only explicit protected P2P telemetry selects Aqara, never native RTSP, unrelated URLs, or HA HLS", () => {
   assert.deepEqual(
     nvrCameraSource(camera, {
