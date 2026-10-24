@@ -97,12 +97,7 @@ export async function nodeRequest(
 export async function nodeJson(node, path, options) {
   const response = await nodeRequest(node, path, options);
   if (!response.ok) {
-    await response.body?.cancel();
-    throw new Error(
-      response.status === 401
-        ? "invalid_node_key_or_clock"
-        : `Node returned ${response.status}`,
-    );
+    throw await nodeApiError(response);
   }
   const text = await response.text();
   if (text.length > 1000000) throw new Error("invalid_node_response");
@@ -111,4 +106,52 @@ export async function nodeJson(node, path, options) {
   } catch {
     throw new Error("invalid_node_response");
   }
+}
+
+const cameraFailureCodes = new Set([
+  "camera_session_not_found",
+  "camera_recording_not_found",
+  "camera_recording_not_ready",
+  "camera_ring_not_ready",
+  "camera_session_busy",
+  "camera_recording_busy",
+  "camera_session_unavailable",
+  "camera_engine_unavailable",
+  "camera_engine_timeout",
+  "camera_media_failed",
+  "invalid_camera_recording",
+  "storage_full",
+  "node_unavailable",
+]);
+
+/** Preserve only known machine codes; never retain arbitrary remote messages. */
+export async function nodeApiError(response) {
+  const error = Object.assign(
+    new Error(
+      response.status === 401
+        ? "invalid_node_key_or_clock"
+        : `Node returned ${response.status}`,
+    ),
+    { status: response.status },
+  );
+  const reader = response.body?.getReader();
+  if (!reader) return error;
+  const chunks = [];
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 4096) return error;
+      chunks.push(Buffer.from(value));
+    }
+    const code = JSON.parse(Buffer.concat(chunks).toString("utf8")).error;
+    if (cameraFailureCodes.has(code)) error.code = code;
+  } catch {
+    // The HTTP failure remains useful when its optional body is malformed.
+  } finally {
+    await reader.cancel().catch(() => {});
+  }
+  return error;
 }

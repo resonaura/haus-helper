@@ -279,14 +279,21 @@ test("Eufy keeps its explicitly configured RTSP route and never bypasses a regis
     state: "rtsp://user:private@192.168.4.22/live",
   };
   const entry = { entity_id: native.entity_id, device_id: "eufy-camera" };
-  const provider = { entity_id: "sensor.garden_stream_provider", state: "RTSP" };
+  const provider = {
+    entity_id: "sensor.garden_stream_provider",
+    state: "RTSP",
+  };
   assert.deepEqual(
     nvrCameraSource(eufy, { states: [native, provider], entities: [entry] }),
     { kind: "rtsp", url: native.state },
   );
   assert.deepEqual(
     nvrCameraSource(eufy, {
-      states: [native, { ...provider, state: "P2P" }, state("rtsp://192.168.4.44/p2p")],
+      states: [
+        native,
+        { ...provider, state: "P2P" },
+        state("rtsp://192.168.4.44/p2p"),
+      ],
       entities: [entry],
     }),
     { kind: "p2p-restream", url: "rtsp://192.168.4.44/p2p" },
@@ -300,19 +307,29 @@ test("Eufy keeps its explicitly configured RTSP route and never bypasses a regis
         { entity_id: state("").entity_id, disabled_by: "user" },
       ],
     },
-    { states: [native, provider], entities: [{ ...entry, disabled_by: "user" }] },
     {
-      states: [{ ...native, entity_id: "sensor.neighbor_rtsp_stream_url" }, provider],
+      states: [native, provider],
+      entities: [{ ...entry, disabled_by: "user" }],
+    },
+    {
+      states: [
+        { ...native, entity_id: "sensor.neighbor_rtsp_stream_url" },
+        provider,
+      ],
       entities: [],
     },
-    { states: [{ ...native, state: "rtsp://8.8.8.8/live" }, provider], entities: [entry] },
+    {
+      states: [{ ...native, state: "rtsp://8.8.8.8/live" }, provider],
+      entities: [entry],
+    },
   ])
     assert.throws(() => nvrCameraSource(eufy, registry), /source_unavailable/);
   assert.throws(
-    () => nvrCameraSource(eufy, {
-      states: [{ ...native, state: "rtsp://127.0.0.1/live" }, provider],
-      entities: [entry],
-    }),
+    () =>
+      nvrCameraSource(eufy, {
+        states: [{ ...native, state: "rtsp://127.0.0.1/live" }, provider],
+        entities: [entry],
+      }),
     /not_reachable/,
   );
   for (const providers of [
@@ -322,14 +339,22 @@ test("Eufy keeps its explicitly configured RTSP route and never bypasses a regis
     [{ ...provider, entity_id: "sensor.neighbor_stream_provider" }],
   ])
     assert.throws(
-      () => nvrCameraSource(eufy, { states: [native, ...providers], entities: [entry] }),
+      () =>
+        nvrCameraSource(eufy, {
+          states: [native, ...providers],
+          entities: [entry],
+        }),
       /protected_p2p/,
     );
   assert.throws(
-    () => nvrCameraSource(eufy, {
-      states: [native, provider],
-      entities: [entry, { entity_id: provider.entity_id, disabled_by: "user" }],
-    }),
+    () =>
+      nvrCameraSource(eufy, {
+        states: [native, provider],
+        entities: [
+          entry,
+          { entity_id: provider.entity_id, disabled_by: "user" },
+        ],
+      }),
     /protected_p2p/,
   );
 });
@@ -539,6 +564,62 @@ test("recording input stays on NVR and matching late Activity Assist extends one
   );
   assert.equal(recorder.buffers.get(camera.id).inputKind, "nvr-rtsp");
   assert.equal(recorder.buffers.get(camera.id).process, undefined);
+});
+test("capture diagnostics retain submission codes, throttle retries and never log remote secrets", async (t) => {
+  const diagnostics = [];
+  const error = Object.assign(
+    Error("rtsp://private:secret@example.invalid/live"),
+    { code: "camera_recording_busy", status: 503 },
+  );
+  const { sessions, store } = await fixture(t, {
+    log: (event, fields) => diagnostics.push({ event, ...fields }),
+    json: async (_node, path) => {
+      if (path.endsWith("/recordings")) throw error;
+      return session;
+    },
+  });
+  const event = store.create(
+    camera.id,
+    "motion",
+    Date.now(),
+    Date.now() + 1000,
+  );
+  await assert.rejects(sessions.record(event), error);
+  await assert.rejects(sessions.record(event), error);
+  assert.deepEqual(diagnostics, [
+    {
+      event: "recording_operation_failed",
+      eventId: event.id,
+      cameraId: camera.id,
+      phase: "submit",
+      reason: "camera_recording_busy",
+      status: 503,
+    },
+  ]);
+  assert.equal(JSON.stringify(diagnostics).includes("secret"), false);
+  assert.equal(sessions.eventPending.size, 0);
+  assert.equal(sessions.events.size, 0);
+});
+test("diagnostic failures do not hide the original capture error or retain pending work", async (t) => {
+  const failure = Error("camera_recording_busy");
+  const { sessions, store } = await fixture(t, {
+    log: () => {
+      throw Error("logger failed");
+    },
+    json: async (_node, path) => {
+      if (path.endsWith("/recordings")) throw failure;
+      return session;
+    },
+  });
+  const event = store.create(
+    camera.id,
+    "motion",
+    Date.now(),
+    Date.now() + 1000,
+  );
+  await assert.rejects(sessions.finalize(event), failure);
+  assert.equal(sessions.eventPending.size, 0);
+  assert.equal(sessions.events.size, 0);
 });
 test("verified NVR MP4 imports actual pre-roll/audio and ACKs only after catalog persistence", async (t) => {
   const sourceRoot = await mkdtemp(join(tmpdir(), "haus-nvr-recording-"));

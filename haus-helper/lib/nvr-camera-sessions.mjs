@@ -27,7 +27,8 @@ function eufyRtspSelected(camera, states, entities) {
   const entries = new Map(entities.map((entry) => [entry.entity_id, entry]));
   const names = new Set(
     [camera.id, ...(camera.aliases ?? [])].map(
-      (id) => `sensor.${id.split(".")[1].replace(/_internal$/, "")}_stream_provider`,
+      (id) =>
+        `sensor.${id.split(".")[1].replace(/_internal$/, "")}_stream_provider`,
     ),
   );
   const devices = new Set(
@@ -91,6 +92,10 @@ export class NvrCameraSessions {
     request = nodeRequest,
     inspect = probe,
     resolve = lookup,
+    log = (event, fields) =>
+      console.log(
+        JSON.stringify({ component: "camera-capture", event, ...fields }),
+      ),
   }) {
     Object.assign(this, {
       config,
@@ -102,6 +107,7 @@ export class NvrCameraSessions {
       request,
       inspect,
       resolve,
+      log,
     });
     this.buffers = new Map();
     this.entries = new Map();
@@ -113,6 +119,7 @@ export class NvrCameraSessions {
     this.closedViewers = new Map();
     this.events = new Map();
     this.eventPending = new Map();
+    this.recordingDiagnostics = new Map();
     this.abort = new AbortController();
     this.recordingOwner = `recording-${randomUUID()}`;
     store.db.exec(
@@ -557,9 +564,57 @@ export class NvrCameraSessions {
     this.eventPending.set(event.id, task);
     try {
       return await task;
+    } catch (error) {
+      this.reportRecordingFailure(event, "submit", error);
+      throw error;
     } finally {
       if (this.eventPending.get(event.id) === task)
         this.eventPending.delete(event.id);
+    }
+  }
+  reportRecordingFailure(event, phase, error) {
+    if (this.stopped) return;
+    const reason = error.code ?? error.message;
+    const known = new Set([
+      "camera_session_not_found",
+      "camera_recording_not_found",
+      "camera_recording_not_ready",
+      "camera_ring_not_ready",
+      "camera_session_busy",
+      "camera_recording_busy",
+      "camera_recording_failed",
+      "camera_session_unavailable",
+      "camera_engine_unavailable",
+      "camera_engine_timeout",
+      "camera_media_failed",
+      "invalid_camera_recording",
+      "camera_recording_node_unavailable",
+      "camera_recording_audio_missing",
+      "camera_recording_digest_mismatch",
+      "camera_nvr_required",
+      "storage_full",
+      "node_unavailable",
+      "invalid_node_key_or_clock",
+    ]);
+    const code = known.has(reason) ? reason : "recording_operation_failed";
+    const key = `${event.id}:${phase}:${code}`;
+    if (this.now() - (this.recordingDiagnostics.get(key) ?? -Infinity) < 30000)
+      return;
+    this.recordingDiagnostics.set(key, this.now());
+    if (this.recordingDiagnostics.size > 256)
+      this.recordingDiagnostics.delete(
+        this.recordingDiagnostics.keys().next().value,
+      );
+    try {
+      this.log("recording_operation_failed", {
+        eventId: event.id,
+        cameraId: event.cameraId,
+        phase,
+        reason: code,
+        ...(Number.isInteger(error.status) ? { status: error.status } : {}),
+      });
+    } catch {
+      // Diagnostic failures cannot change capture or cleanup behavior.
     }
   }
   async submitRecord(event) {
@@ -601,6 +656,14 @@ export class NvrCameraSessions {
     return job;
   }
   async finalize(event) {
+    try {
+      return await this.finalizeRecording(event);
+    } catch (error) {
+      this.reportRecordingFailure(event, "finalize", error);
+      throw error;
+    }
+  }
+  async finalizeRecording(event) {
     const job = await this.record(event),
       node = this.cluster.nodes().find((node) => node.id === job.nodeId);
     if (!node?.enabled) throw missing("camera_recording_node_unavailable");
