@@ -161,6 +161,7 @@ export class Servers {
     const primary = await this.primary();
     const remotes = (this.cluster?.status().nodes ?? []).map((node) => ({
       id: node.id,
+      ...(node.sshServerId ? { sshServerId: node.sshServerId } : {}),
       kind: "nvr",
       name: node.name,
       url: node.url,
@@ -181,6 +182,7 @@ export class Servers {
       error: node.error,
     }));
     return {
+      features: { monitoringOnlyServers: true },
       servers: [{ ...primary, online: Boolean(this.ha.connected) }, ...remotes],
       sampledAt: this.now(),
     };
