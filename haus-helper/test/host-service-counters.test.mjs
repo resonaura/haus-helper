@@ -138,7 +138,8 @@ test("missing or denied host bus stays unavailable without crashing or retrying 
     factory: () => {
       creations++;
       const connection = new EventEmitter();
-      connection.stream = { destroy() {} };
+      connection.stream = new EventEmitter();
+      connection.stream.destroy = () => {};
       return {
         cookies: {},
         connection,
@@ -195,10 +196,9 @@ test("an exited one-shot with no remaining cgroup has zero current resource use"
 test("a connection that never completes its handshake is closed instead of accumulating queued requests", async () => {
   const connection = new EventEmitter();
   let destroyed = false;
-  connection.stream = {
-    destroy() {
-      destroyed = true;
-    },
+  connection.stream = new EventEmitter();
+  connection.stream.destroy = () => {
+    destroyed = true;
   };
   const bus = {
     cookies: {},
