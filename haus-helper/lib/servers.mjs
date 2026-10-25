@@ -1,6 +1,6 @@
-import { readFile, statfs } from "node:fs/promises";
+import { readFile, readdir, statfs } from "node:fs/promises";
 import { HostTelemetry } from "./host-telemetry.mjs";
-export { parseHostProc } from "./host-telemetry.mjs";
+export { parseHostCpuModel, parseHostProc } from "./host-telemetry.mjs";
 
 export class Servers {
   constructor({
@@ -11,6 +11,7 @@ export class Servers {
     backups,
     fetcher = fetch,
     read = readFile,
+    list = readdir,
     filesystem = statfs,
     now = Date.now,
   }) {
@@ -25,7 +26,12 @@ export class Servers {
       filesystem,
       now,
     });
-    this.telemetry = new HostTelemetry(config, { fetcher, read, filesystem });
+    this.telemetry = new HostTelemetry(config, {
+      fetcher,
+      read,
+      list,
+      filesystem,
+    });
     store.db.exec(
       "CREATE TABLE IF NOT EXISTS service_policy (id TEXT PRIMARY KEY,value TEXT NOT NULL)",
     );

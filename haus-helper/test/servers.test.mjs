@@ -3,12 +3,20 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Servers, parseHostProc } from "../lib/servers.mjs";
+import { Servers, parseHostCpuModel, parseHostProc } from "../lib/servers.mjs";
 import { Store } from "../lib/store.mjs";
 import { createApi } from "../lib/server.mjs";
 
 const meminfo =
   "MemTotal: 8000 kB\nMemAvailable: 3000 kB\nSwapTotal: 2000 kB\nSwapFree: 1500 kB\n";
+
+function memoryDevice(size) {
+  const raw = Buffer.alloc(32);
+  raw[0] = 17;
+  raw[1] = raw.length;
+  raw.writeUInt16LE(size, 12);
+  return raw;
+}
 
 test("host CPU/memory parsing measures kernel totals and does not substitute core container memory", () => {
   const sample = parseHostProc(
@@ -23,6 +31,23 @@ test("host CPU/memory parsing measures kernel totals and does not substitute cor
   assert.equal(sample.swap.usedBytes, 500 * 1024);
   assert.equal(sample.uptimeSeconds, 100.25);
   assert.equal(parseHostProc("", "", "").memory.totalBytes, null);
+});
+
+test("identifies Raspberry Pi ARM CPU models from Linux procfs core identifiers", () => {
+  assert.equal(
+    parseHostCpuModel(
+      "processor : 0\nCPU implementer : 0x41\nCPU part : 0xd08\n" +
+        "processor : 1\nCPU implementer : 0x41\nCPU part : 0xd08\n",
+    ),
+    "ARM Cortex-A72",
+  );
+  assert.equal(
+    parseHostCpuModel(
+      "processor : 0\nCPU implementer : 0x41\nCPU part : 0xd0b\n",
+    ),
+    "ARM Cortex-A76",
+  );
+  assert.equal(parseHostCpuModel(""), null);
 });
 
 async function fixture(t, standalone = false) {
@@ -125,16 +150,22 @@ async function fixture(t, standalone = false) {
     },
     backups: { markChanged: () => changed++ },
     now: () => at,
+    list: async (path) =>
+      path === "/sys/firmware/dmi/entries" ? ["17-0", "17-1"] : [],
     read: async (path) =>
-      path.endsWith("meminfo")
-        ? meminfo
-        : path.endsWith("uptime")
-          ? "100 0"
-          : path.endsWith("stat")
-            ? `cpu ${cpu} 0 0 ${idle} 0 0 0 0\ncpu0 1\n`
-            : path.endsWith("cpuinfo")
-              ? "model name : Fixture CPU\n"
-              : "0.1 0.2 0.3 1/100 1",
+      path.endsWith("/17-0/raw")
+        ? memoryDevice(8192)
+        : path.endsWith("/17-1/raw")
+          ? memoryDevice(8192)
+          : path.endsWith("meminfo")
+            ? meminfo
+            : path.endsWith("uptime")
+              ? "100 0"
+              : path.endsWith("stat")
+                ? `cpu ${cpu} 0 0 ${idle} 0 0 0 0\ncpu0 1\n`
+                : path.endsWith("cpuinfo")
+                  ? "model name : Fixture CPU\n"
+                  : "0.1 0.2 0.3 1/100 1",
     filesystem: async () => ({
       blocks: 100000000,
       bavail: 50000000,
@@ -175,6 +206,7 @@ test("aggregates real HA host and managed container samples, preserves unknown v
     primary = first.servers[0];
   assert.equal(primary.settings.storageLimitBytes, null);
   assert.equal(primary.host.memory.totalBytes, 8000 * 1024);
+  assert.equal(primary.host.memory.installedBytes, 16 * 1024 ** 3);
   assert.equal(primary.host.cpu.usage, null);
   assert.equal(
     primary.host.docker.containers.find((x) => x.id === "home-assistant-core")
