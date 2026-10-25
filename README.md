@@ -23,6 +23,8 @@ Completed MP4s and thumbnails live in `/media/haus`. The database and temporary 
 
 ## Home servers
 
+Haus Helper 0.3.44 supports monitoring-only server connections with no storage or stream role. The desktop can attach one to an existing SSH device so terminal access and telemetry share the same card and room. Optional SSH associations contain only a device identity; SSH credentials remain on the desktop. Monitoring-only connections receive no recordings, playback preparation or recovery copies. Use the monitoring Compose setup in the [server agent repository](https://github.com/resonaura/haus-nvr/blob/main/docs/server-management.md).
+
 Haus has an authenticated `GET /api/servers` inventory for the Home Assistant primary and all registered NVR servers. A server reports its CPU, memory, swap, disk/volume layout and available Docker/PM2 inventory. Missing capabilities remain explicitly unavailable. Linux host CPU/memory use kernel-wide `/proc` counters; Home Assistant OS and physical disks come from Supervisor. Core and app container usage is listed separately and is never presented as host usage. The Supervisor Docker view covers managed Home Assistant containers; it does not pretend to inventory unrelated host containers. PM2 needs a host collector on a remote node.
 
 The app uses the Supervisor `manager` role to read host disks, installed app inventory and per-container statistics. Haus exposes only fixed read endpoints for that telemetry, never a generic Supervisor proxy or Docker socket. Samples are cached for five seconds, coalesced across clients, and have a 2.5-second collection deadline; slow or unsupported sources leave nullable metrics.

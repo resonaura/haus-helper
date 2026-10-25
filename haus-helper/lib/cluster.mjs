@@ -12,6 +12,11 @@ import {
   prepareClusterPlayback,
   playbackCandidates,
 } from "./cluster-playback.mjs";
+const validSshServerId = (value) =>
+  typeof value === "string" &&
+  /^ssh:[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(
+    value,
+  );
 export class Cluster {
   constructor(store, backups, { now = Date.now } = {}) {
     this.store = store;
@@ -106,6 +111,9 @@ export class Cluster {
   }
   async add(input) {
     if (
+      !input ||
+      typeof input !== "object" ||
+      Array.isArray(input) ||
       typeof input.name !== "string" ||
       !input.name.trim() ||
       input.name.length > 100 ||
@@ -114,8 +122,9 @@ export class Cluster {
       input.key.length > 256 ||
       typeof input.allowHttp !== "boolean" ||
       !Array.isArray(input.roles) ||
-      !input.roles.length ||
-      input.roles.some((role) => !["storage", "stream"].includes(role))
+      input.roles.length > 2 ||
+      input.roles.some((role) => !["storage", "stream"].includes(role)) ||
+      (input.sshServerId !== undefined && !validSshServerId(input.sshServerId))
     )
       throw new Error("invalid_node");
     const node = {
@@ -126,9 +135,15 @@ export class Cluster {
       roles: [...new Set(input.roles)],
       allowHttp: input.allowHttp,
       enabled: true,
+      ...(input.sshServerId ? { sshServerId: input.sshServerId } : {}),
     };
     if (this.nodes().some((item) => item.url === node.url))
       throw new Error("invalid_duplicate_node");
+    if (
+      node.sshServerId &&
+      this.nodes().some((item) => item.sshServerId === node.sshServerId)
+    )
+      throw new Error("invalid_duplicate_ssh_server");
     const status = await nodeJson(node, "/v1/status", {
       signal: this.abort.signal,
       timeout: 10000,
@@ -140,6 +155,20 @@ export class Cluster {
       !status.streams
     )
       throw new Error("invalid_node_protocol");
+    if (
+      Array.isArray(status.roles) &&
+      node.roles.some((role) => !status.roles.includes(role))
+    )
+      throw new Error("invalid_node_roles");
+    // Enrollment requests can overlap while checking different remote hosts.
+    // Recheck identities immediately before the synchronous catalog write.
+    if (this.nodes().some((item) => item.url === node.url))
+      throw new Error("invalid_duplicate_node");
+    if (
+      node.sshServerId &&
+      this.nodes().some((item) => item.sshServerId === node.sshServerId)
+    )
+      throw new Error("invalid_duplicate_ssh_server");
     node.instanceId = status.instanceId;
     this.store.db
       .prepare("INSERT INTO cluster_nodes(id,value)VALUES(?,?)")
@@ -151,7 +180,7 @@ export class Cluster {
     });
     this.invalidateHealth();
     this.backups.markChanged();
-    return this.status();
+    return { ...this.status(), pairedNodeId: node.id };
   }
   async update(id, patch) {
     const node = this.nodes().find((node) => node.id === id);
@@ -162,15 +191,27 @@ export class Cluster {
       Array.isArray(patch) ||
       !Object.keys(patch).length ||
       Object.keys(patch).some(
-        (key) => !["enabled", "storageLimitBytes"].includes(key),
+        (key) => !["enabled", "storageLimitBytes", "sshServerId"].includes(key),
       ) ||
       (patch.enabled !== undefined && typeof patch.enabled !== "boolean") ||
+      (patch.sshServerId !== undefined &&
+        patch.sshServerId !== null &&
+        !validSshServerId(patch.sshServerId)) ||
+      (Object.hasOwn(patch, "sshServerId") &&
+        Object.keys(patch).length !== 1) ||
       (patch.storageLimitBytes !== undefined &&
         patch.storageLimitBytes !== null &&
         (!Number.isSafeInteger(patch.storageLimitBytes) ||
           patch.storageLimitBytes < 1024 ** 2))
     )
       throw new Error("invalid_node");
+    if (
+      patch.sshServerId &&
+      this.nodes().some(
+        (item) => item.id !== id && item.sshServerId === patch.sshServerId,
+      )
+    )
+      throw new Error("invalid_duplicate_ssh_server");
     if (Object.hasOwn(patch, "storageLimitBytes")) {
       const settings = await nodeJson(node, "/v1/settings", {
         method: "PATCH",
@@ -198,6 +239,9 @@ export class Cluster {
       JSON.stringify({
         ...node,
         ...(patch.enabled !== undefined ? { enabled: patch.enabled } : {}),
+        ...(Object.hasOwn(patch, "sshServerId")
+          ? { sshServerId: patch.sshServerId }
+          : {}),
       }),
       id,
     );
@@ -448,13 +492,14 @@ export class Cluster {
         (node) => node.enabled && this.health.get(node.id)?.online,
       );
       const nodes = peers.filter((node) => node.roles.includes("storage"));
+      const workers = peers.filter((node) => node.roles.length > 0);
       // Configuration/HA recovery copies go to every storage node by default.
       for (const item of this.backups.list())
         await this.replicate(
           this.backups.path(item.digest),
           item.digest,
           "backup",
-          peers,
+          nodes,
         );
       // Keep the helper authoritative; node failures never discard its original media.
       const nodeIds = nodes.map((node) => node.id);
@@ -519,7 +564,7 @@ export class Cluster {
       await refreshArchiveStorageMetadata(this);
       await this.refreshHealth({ force: true });
       await this.recordingCache?.trim();
-      await this.prune(peers);
+      await this.prune(workers);
     } finally {
       this.busy = false;
     }

@@ -1,3 +1,7 @@
+# 0.3.44
+
+- Connect monitoring-only home servers without assigning camera or recovery jobs. Associate an existing SSH device with one managed telemetry connection, reject conflicting associations and unsupported roles, and advertise monitoring capability to the desktop. Recovery replication now honors the storage role; existing stored copies remain subject to their usual retention policy.
+
 # 0.3.43
 
 - Measure per-component managed Haus file usage in the background, including actual local originals/prepared video, pre-event buffers, snapshots, encrypted backups and databases. Separate file sizes from allocated blocks, deduplicate hard links, avoid following symlinks and retain partial/unknown measurements. Repair old NVR catalog roles through bounded metadata-only updates, preserving prepared playback and original bytes. No quota, retention, camera transport or backup-policy changes.
