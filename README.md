@@ -50,3 +50,9 @@ Tests include automatic detector association, event merging, storage limits and 
 For standalone API development, set `HAUS_STANDALONE=1`, `HAUS_API_TOKEN`, `HAUS_HA_URL`, `HAUS_HA_TOKEN`, `HAUS_DATA`, and `HAUS_MEDIA`. Standalone API requests require a bearer token; the ordinary web UI is intended for authenticated Home Assistant Ingress. Never commit these environment values.
 
 The API is versioned by the application release and keeps service modules separate from the camera recorder so future local Haus services can be added without changing the recording model.
+
+### Managed Haus storage measurements
+
+Server `storage.usage` exposes cached, background file accounting across managed data and media roots. It does not scan unrelated Home Assistant files, container images or external runtime logs. Logical file size and filesystem-reported allocated blocks are separate; hard links count once, cross-category sharing is explicit, and unknown allocation stays null. Bounded or unreadable scans are partial lower bounds. Allocated blocks may still share physical extents through compression, snapshots or reflinks.
+
+NVR originals/prepared roles come from authoritative archive digests. Older node catalogs are repaired in small resumable metadata-only batches after they support usage version 1; this never reuploads, deletes or normalizes media. The first sample may be unavailable, then updates at most every 30 seconds independently of CPU/RAM sampling.
