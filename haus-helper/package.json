@@ -1,6 +1,6 @@
 {
   "name": "haus-helper",
-  "version": "0.3.40",
+  "version": "0.3.41",
   "private": true,
   "type": "module",
   "description": "Local camera event recordings and services for Haus",
@@ -13,6 +13,7 @@
     "check": "node --check lib/main.mjs && npm test"
   },
   "dependencies": {
+    "@homebridge/dbus-native": "0.7.9",
     "ws": "8.22.0"
   }
 }

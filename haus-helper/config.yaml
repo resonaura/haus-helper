@@ -1,6 +1,6 @@
 name: Haus
 slug: haus-helper
-version: "0.3.40"
+version: "0.3.41"
 description: "Local camera event recording, a private timeline, and companion services for Haus."
 url: "https://github.com/resonaura/haus-helper"
 image: "ghcr.io/resonaura/haus-helper-{arch}"
@@ -22,6 +22,7 @@ panel_title: Haus
 homeassistant_api: true
 hassio_api: true
 hassio_role: manager
+host_dbus: true
 panel_admin: false
 backup: hot
 backup_pre: "sh -c 'test ! -f /app/lib/backup-hook.mjs || node /app/lib/backup-hook.mjs pre'"

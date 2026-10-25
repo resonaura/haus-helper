@@ -724,5 +724,6 @@ export function createApi({
   server.headersTimeout = 10000;
   server.on("close", talkback.stopAll);
   server.on("close", () => preparation.clear());
+  server.on("close", () => servers?.telemetry?.stop());
   return server;
 }
