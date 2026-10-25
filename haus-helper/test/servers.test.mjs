@@ -376,6 +376,7 @@ test(
 test("slightly early one-second polls refresh CPU/memory instead of returning a second cached sample", async (t) => {
   const f = await fixture(t);
   const first = await f.servers.status();
+  assert.equal(first.servers[0].host.docker.cpuPercentBasis, "host");
   const inventoryCalls = f.calls.length;
   f.advance(995);
   const second = await f.servers.status();

@@ -21,7 +21,7 @@ test("one-shot Supervisor counters measure container CPU across polls without ad
   );
   assert.equal((await telemetry.stats("/core/stats")).cpu_percent, null);
   sample = { ...sample, cpu_usage: 125, cpu_system_usage: 2000 };
-  assert.equal((await telemetry.stats("/core/stats")).cpu_percent, 10);
+  assert.equal((await telemetry.stats("/core/stats")).cpu_percent, 2.5);
   assert.deepEqual(calls, [
     "/core/stats?one_shot=true",
     "/core/stats?one_shot=true",
