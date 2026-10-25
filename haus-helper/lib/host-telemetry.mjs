@@ -3,6 +3,7 @@ import { homeAssistantDisks } from "./host-disks.mjs";
 import { homeAssistantGraphics } from "./host-gpus.mjs";
 import { linuxInstalledMemory } from "./host-memory.mjs";
 import { homeAssistantServices } from "./host-services.mjs";
+import { HostServiceCounters } from "./host-service-counters.mjs";
 
 const nullableNumber = (value) =>
   Number.isFinite(value) && value >= 0 ? value : null;
@@ -128,12 +129,16 @@ export class HostTelemetry {
       read = readFile,
       list = readdir,
       filesystem = statfs,
+      serviceCounters,
     } = {},
   ) {
     Object.assign(this, { config, fetcher, read, list, filesystem });
     this.appStats = new Map();
     this.cpuSamples = new Map();
     this.appCursor = 0;
+    this.serviceCounters =
+      serviceCounters ??
+      (!config.standalone ? new HostServiceCounters() : null);
   }
   async supervisor(path) {
     if (this.config.standalone) return null;
@@ -241,6 +246,8 @@ export class HostTelemetry {
           installedBytes: this.value.memory.installedBytes,
         },
         swap: proc.swap,
+        systemServices:
+          this.serviceCounters?.snapshot() ?? this.value.systemServices,
       };
       return this.value;
     }
@@ -257,6 +264,7 @@ export class HostTelemetry {
       mountinfo,
       mediaFilesystem,
       systemServices,
+      serviceCounters,
     ] = await Promise.all([
       this.supervisor("/host/info"),
       this.supervisor("/core/info"),
@@ -274,6 +282,7 @@ export class HostTelemetry {
       this.read("/proc/self/mountinfo", "utf8").catch(() => ""),
       this.filesystem(this.config.media).catch(() => null),
       this.supervisor("/host/services"),
+      this.serviceCounters?.collect(),
     ]);
     const proc =
       files?.[0] && files?.[1]
@@ -427,7 +436,8 @@ export class HostTelemetry {
             }
           : unavailable(),
       pm2: { available: false, source: "unavailable", processes: [] },
-      systemServices: homeAssistantServices(systemServices, at),
+      systemServices:
+        serviceCounters ?? homeAssistantServices(systemServices, at),
     };
     if (inventory && this.value && Date.parse(this.value.sampledAt) >= at) {
       const latest = this.value;
@@ -444,8 +454,16 @@ export class HostTelemetry {
       };
       host.swap = latest.swap;
       host.uptimeSeconds = latest.uptimeSeconds;
+      if (
+        Date.parse(latest.systemServices?.sampledAt) >
+        Date.parse(host.systemServices?.sampledAt)
+      )
+        host.systemServices = latest.systemServices;
     }
     this.value = host;
     return host;
+  }
+  stop() {
+    this.serviceCounters?.stop();
   }
 }
