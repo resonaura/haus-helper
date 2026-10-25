@@ -192,8 +192,8 @@ async function fixture(t, standalone = false) {
     config,
     calls,
     changed: () => changed,
-    advance: () => {
-      at += 5001;
+    advance: (ms = 5001) => {
+      at += ms;
       cpu += 30;
       idle += 70;
     },
@@ -372,3 +372,22 @@ test(
     assert.equal(statsCalls, calls);
   },
 );
+
+test("visible-dashboard CPU/memory samples refresh after one second without requerying Supervisor inventory", async (t) => {
+  const f = await fixture(t);
+  const first = await f.servers.status();
+  const inventoryCalls = f.calls.length;
+  f.advance(1000);
+  const second = await f.servers.status();
+  assert.notEqual(
+    second.servers[0].host.sampledAt,
+    first.servers[0].host.sampledAt,
+  );
+  assert.ok(Math.abs(second.servers[0].host.cpu.usage - 0.3) < 0.0001);
+  assert.equal(
+    second.servers[0].host.memory.totalBytes,
+    first.servers[0].host.memory.totalBytes,
+  );
+  assert.equal(f.calls.length, inventoryCalls);
+  assert.deepEqual(second.servers[0].host.disks, first.servers[0].host.disks);
+});

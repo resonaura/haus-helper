@@ -86,7 +86,7 @@ test("health refreshes coalesce, cache completed attempts and retry after the bo
   await first;
   assert.equal(requests, 1);
   await f.cluster.refreshHealth();
-  f.advance(4999);
+  f.advance(999);
   await f.cluster.refreshHealth();
   assert.equal(requests, 1);
   f.advance(1);
@@ -95,7 +95,11 @@ test("health refreshes coalesce, cache completed attempts and retry after the bo
   const forced = f.cluster.refreshHealth({ force: true });
   assert.equal(f.cluster.refreshHealth({ force: true }), forced);
   await forced;
-  assert.equal(requests, 3, "copy boundaries bypass the TTL without overlapping requests");
+  assert.equal(
+    requests,
+    3,
+    "copy boundaries bypass the TTL without overlapping requests",
+  );
 });
 
 test("server reads receive fresh process/resource reports while replication is still running", async (t) => {
@@ -142,7 +146,11 @@ test("server reads receive fresh process/resource reports while replication is s
   assert.equal(f.cluster.busy, true, "the archive has not finished");
   finishCopy.resolve();
   await distribution;
-  assert.equal(requests, 4, "both archive synchronization boundaries force a fresh report");
+  assert.equal(
+    requests,
+    4,
+    "both archive synchronization boundaries force a fresh report",
+  );
 });
 
 test("a forced boundary queues one fresh pass after an older dashboard request", async (t) => {
@@ -246,39 +254,49 @@ test("shutdown aborts outstanding status requests and settles the health lifecyc
   assert.equal(requests, 1);
 });
 
-test("server reads return last-known data without waiting behind a hung peer", { timeout: 3000 }, async (t) => {
-  const received = deferred(),
-    release = deferred();
-  const f = await fixture(t, async (_req, res) => {
-    received.resolve();
-    await release.promise;
-    reply(res, 0.8);
-  });
-  const node = f.add();
-  f.cluster.health.set(node.id, {
-    online: true,
-    lastSeen: 0,
-    remote: { host: { sampledAt: new Date(0).toISOString(), cpu: { usage: 0.1 } } },
-  });
-  const refreshing = f.cluster.refreshHealth();
-  await received.promise;
-  const servers = new Servers({
-    store: f.store,
-    cluster: f.cluster,
-    backups: f.backups,
-    ha: { connected: true },
-    config: { standalone: true, max_storage_gb: 0, media: f.media },
-    now: f.now,
-    filesystem: async () => ({ blocks: 1000, bsize: 4096, bavail: 500 }),
-  });
-  const before = await servers.status();
-  assert.equal(before.servers[1].host.cpu.usage, 0.1);
-  assert.equal(f.cluster.healthRefresh, refreshing, "status returned while the node is still pending");
-  release.resolve();
-  await refreshing;
-  const after = await servers.status();
-  assert.equal(after.servers[1].host.cpu.usage, 0.8);
-});
+test(
+  "server reads return last-known data without waiting behind a hung peer",
+  { timeout: 3000 },
+  async (t) => {
+    const received = deferred(),
+      release = deferred();
+    const f = await fixture(t, async (_req, res) => {
+      received.resolve();
+      await release.promise;
+      reply(res, 0.8);
+    });
+    const node = f.add();
+    f.cluster.health.set(node.id, {
+      online: true,
+      lastSeen: 0,
+      remote: {
+        host: { sampledAt: new Date(0).toISOString(), cpu: { usage: 0.1 } },
+      },
+    });
+    const refreshing = f.cluster.refreshHealth();
+    await received.promise;
+    const servers = new Servers({
+      store: f.store,
+      cluster: f.cluster,
+      backups: f.backups,
+      ha: { connected: true },
+      config: { standalone: true, max_storage_gb: 0, media: f.media },
+      now: f.now,
+      filesystem: async () => ({ blocks: 1000, bsize: 4096, bavail: 500 }),
+    });
+    const before = await servers.status();
+    assert.equal(before.servers[1].host.cpu.usage, 0.1);
+    assert.equal(
+      f.cluster.healthRefresh,
+      refreshing,
+      "status returned while the node is still pending",
+    );
+    release.resolve();
+    await refreshing;
+    const after = await servers.status();
+    assert.equal(after.servers[1].host.cpu.usage, 0.8);
+  },
+);
 
 test("a rejected background refresh does not reject the server response or leak an unhandled promise", async (t) => {
   const f = await fixture(t, (_req, res) => reply(res));

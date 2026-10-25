@@ -189,6 +189,60 @@ export class HostTelemetry {
     return { ...stats, cpu_percent: percent };
   }
   async collect(at) {
+    if (
+      this.value &&
+      !this.config.standalone &&
+      at - this.inventoryAt < 10000
+    ) {
+      const [stat, meminfo, uptime, loadavg] = await Promise.all(
+        ["stat", "meminfo", "uptime", "loadavg"].map((name) =>
+          this.read(`/proc/${name}`, "utf8").catch(() => null),
+        ),
+      );
+      if (!stat || !meminfo) return this.value;
+      const proc = parseHostProc(stat, meminfo, uptime ?? "");
+      let usage = null;
+      if (
+        this.previousCpu &&
+        proc.cpuTimes &&
+        proc.cpuTimes.total > this.previousCpu.total
+      )
+        usage = Math.max(
+          0,
+          Math.min(
+            1,
+            1 -
+              (proc.cpuTimes.idle - this.previousCpu.idle) /
+                (proc.cpuTimes.total - this.previousCpu.total),
+          ),
+        );
+      this.previousCpu = proc.cpuTimes;
+      this.value = {
+        ...this.value,
+        sampledAt: new Date(at).toISOString(),
+        uptimeSeconds: proc.uptimeSeconds,
+        cpu: {
+          ...this.value.cpu,
+          usage,
+          logicalCores: proc.logicalCores,
+          loadAverage: loadavg
+            ? loadavg
+                .trim()
+                .split(/\s+/)
+                .slice(0, 3)
+                .map(Number)
+                .filter(Number.isFinite)
+            : [],
+        },
+        memory: {
+          ...proc.memory,
+          installedBytes: this.value.memory.installedBytes,
+        },
+        swap: proc.swap,
+      };
+      return this.value;
+    }
+    this.inventoryAt = at;
     this.deadline = Date.now() + 2500;
     const [
       info,
@@ -366,6 +420,7 @@ export class HostTelemetry {
           : unavailable(),
       pm2: { available: false, source: "unavailable", processes: [] },
     };
+    this.value = host;
     return host;
   }
 }
