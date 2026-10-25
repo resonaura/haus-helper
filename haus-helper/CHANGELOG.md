@@ -1,3 +1,11 @@
+# 0.3.37
+
+- Deliver visible server CPU, memory and swap samples at one-second cadence. Keep Supervisor hardware/disk/service inventory on its slower path and coalesce peer refreshes independently of replication work. No camera, storage quota or backup policy changes.
+
+# 0.3.36
+
+- Report nominal installed host memory from SMBIOS module capacities, or ARM device-tree memory banks when firmware provides no SMBIOS. Keep runtime memory counters separate, omit unavailable hardware totals instead of estimating them, and retain CPU identity when optional procfs files are restricted.
+
 # 0.3.35
 
 - Report the actual Home Assistant OS name without treating its kernel as the OS version. Inventory reported DRM render adapters, excluding display-only cards, using optional read-only kernel driver/compatible metadata. Preserve unknown model/type/memory, avoid private hardware identifiers and cache graphics inventory outside camera requests.

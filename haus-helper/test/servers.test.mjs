@@ -3,12 +3,20 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Servers, parseHostProc } from "../lib/servers.mjs";
+import { Servers, parseHostCpuModel, parseHostProc } from "../lib/servers.mjs";
 import { Store } from "../lib/store.mjs";
 import { createApi } from "../lib/server.mjs";
 
 const meminfo =
   "MemTotal: 8000 kB\nMemAvailable: 3000 kB\nSwapTotal: 2000 kB\nSwapFree: 1500 kB\n";
+
+function memoryDevice(size) {
+  const raw = Buffer.alloc(32);
+  raw[0] = 17;
+  raw[1] = raw.length;
+  raw.writeUInt16LE(size, 12);
+  return raw;
+}
 
 test("host CPU/memory parsing measures kernel totals and does not substitute core container memory", () => {
   const sample = parseHostProc(
@@ -23,6 +31,23 @@ test("host CPU/memory parsing measures kernel totals and does not substitute cor
   assert.equal(sample.swap.usedBytes, 500 * 1024);
   assert.equal(sample.uptimeSeconds, 100.25);
   assert.equal(parseHostProc("", "", "").memory.totalBytes, null);
+});
+
+test("identifies Raspberry Pi ARM CPU models from Linux procfs core identifiers", () => {
+  assert.equal(
+    parseHostCpuModel(
+      "processor : 0\nCPU implementer : 0x41\nCPU part : 0xd08\n" +
+        "processor : 1\nCPU implementer : 0x41\nCPU part : 0xd08\n",
+    ),
+    "ARM Cortex-A72",
+  );
+  assert.equal(
+    parseHostCpuModel(
+      "processor : 0\nCPU implementer : 0x41\nCPU part : 0xd0b\n",
+    ),
+    "ARM Cortex-A76",
+  );
+  assert.equal(parseHostCpuModel(""), null);
 });
 
 async function fixture(t, standalone = false) {
@@ -125,16 +150,22 @@ async function fixture(t, standalone = false) {
     },
     backups: { markChanged: () => changed++ },
     now: () => at,
+    list: async (path) =>
+      path === "/sys/firmware/dmi/entries" ? ["17-0", "17-1"] : [],
     read: async (path) =>
-      path.endsWith("meminfo")
-        ? meminfo
-        : path.endsWith("uptime")
-          ? "100 0"
-          : path.endsWith("stat")
-            ? `cpu ${cpu} 0 0 ${idle} 0 0 0 0\ncpu0 1\n`
-            : path.endsWith("cpuinfo")
-              ? "model name : Fixture CPU\n"
-              : "0.1 0.2 0.3 1/100 1",
+      path.endsWith("/17-0/raw")
+        ? memoryDevice(8192)
+        : path.endsWith("/17-1/raw")
+          ? memoryDevice(8192)
+          : path.endsWith("meminfo")
+            ? meminfo
+            : path.endsWith("uptime")
+              ? "100 0"
+              : path.endsWith("stat")
+                ? `cpu ${cpu} 0 0 ${idle} 0 0 0 0\ncpu0 1\n`
+                : path.endsWith("cpuinfo")
+                  ? "model name : Fixture CPU\n"
+                  : "0.1 0.2 0.3 1/100 1",
     filesystem: async () => ({
       blocks: 100000000,
       bavail: 50000000,
@@ -161,8 +192,8 @@ async function fixture(t, standalone = false) {
     config,
     calls,
     changed: () => changed,
-    advance: () => {
-      at += 5001;
+    advance: (ms = 5001) => {
+      at += ms;
       cpu += 30;
       idle += 70;
     },
@@ -175,6 +206,7 @@ test("aggregates real HA host and managed container samples, preserves unknown v
     primary = first.servers[0];
   assert.equal(primary.settings.storageLimitBytes, null);
   assert.equal(primary.host.memory.totalBytes, 8000 * 1024);
+  assert.equal(primary.host.memory.installedBytes, 16 * 1024 ** 3);
   assert.equal(primary.host.cpu.usage, null);
   assert.equal(
     primary.host.docker.containers.find((x) => x.id === "home-assistant-core")
@@ -340,3 +372,44 @@ test(
     assert.equal(statsCalls, calls);
   },
 );
+
+test("visible-dashboard CPU/memory samples refresh after one second without requerying Supervisor inventory", async (t) => {
+  const f = await fixture(t);
+  const first = await f.servers.status();
+  const inventoryCalls = f.calls.length;
+  f.advance(1000);
+  const second = await f.servers.status();
+  assert.notEqual(
+    second.servers[0].host.sampledAt,
+    first.servers[0].host.sampledAt,
+  );
+  assert.ok(Math.abs(second.servers[0].host.cpu.usage - 0.3) < 0.0001);
+  assert.equal(
+    second.servers[0].host.memory.totalBytes,
+    first.servers[0].host.memory.totalBytes,
+  );
+  assert.equal(f.calls.length, inventoryCalls);
+  assert.deepEqual(second.servers[0].host.disks, first.servers[0].host.disks);
+});
+
+test("slow Supervisor metadata cannot hold the resource API behind its inventory refresh", async (t) => {
+  const f = await fixture(t);
+  await f.servers.status();
+  const original = f.servers.telemetry.fetcher;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  f.servers.telemetry.fetcher = async (...args) => {
+    await gate;
+    return original(...args);
+  };
+  f.advance(10000);
+  const live = await f.servers.status();
+  assert.ok(f.servers.telemetry.inventoryRefresh);
+  assert.ok(Math.abs(live.servers[0].host.cpu.usage - 0.3) < 0.0001);
+  const sampledAt = live.servers[0].host.sampledAt;
+  release();
+  await f.servers.telemetry.inventoryRefresh;
+  assert.equal(f.servers.telemetry.value.sampledAt, sampledAt);
+});

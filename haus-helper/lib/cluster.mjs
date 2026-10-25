@@ -237,7 +237,7 @@ export class Cluster {
       !force &&
       this.healthSampledAt !== undefined &&
       at >= this.healthSampledAt &&
-      at - this.healthSampledAt < 5000
+      at - this.healthSampledAt < 1000
     )
       return Promise.resolve();
     const revision = this.healthRevision;
@@ -245,7 +245,7 @@ export class Cluster {
     this.healthRefresh = Promise.resolve()
       .then(() => this.poll())
       .finally(() => {
-        if (revision === this.healthRevision) this.healthSampledAt = this.now();
+        if (revision === this.healthRevision) this.healthSampledAt = at;
         this.healthRefresh = undefined;
         this.healthRefreshForced = false;
       });
@@ -264,7 +264,9 @@ export class Cluster {
           });
           if (
             this.stopped ||
-            !this.nodes().some((current) => current.id === node.id && current.enabled)
+            !this.nodes().some(
+              (current) => current.id === node.id && current.enabled,
+            )
           )
             continue;
           if (remote.protocol !== 1 || typeof remote.instanceId !== "string")
@@ -288,7 +290,9 @@ export class Cluster {
         } catch {
           if (
             this.stopped ||
-            !this.nodes().some((current) => current.id === node.id && current.enabled)
+            !this.nodes().some(
+              (current) => current.id === node.id && current.enabled,
+            )
           )
             continue;
           this.health.set(node.id, {
