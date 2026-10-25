@@ -27,6 +27,22 @@ export function parseDmiInstalledMemory(entries) {
   return foundDevice ? safeSize(totalBytes) : null;
 }
 
+/** Raspberry Pi's documented new-style board revision encodes fitted RAM. */
+export function raspberryInstalledMemory(cpuinfo) {
+  if (
+    !/^(?:Model\s*:\s*Raspberry Pi|Hardware\s*:\s*BCM\d+)/im.test(
+      String(cpuinfo),
+    )
+  )
+    return null;
+  const revision = /^Revision\s*:\s*([a-f\d]{6,8})\s*$/im.exec(cpuinfo)?.[1];
+  if (!revision) return null;
+  const code = Number.parseInt(revision, 16);
+  if (!(code & (1 << 23))) return null;
+  const size = (code >>> 20) & 7;
+  return size <= 6 ? 256 * 1024 ** 2 * 2 ** size : null;
+}
+
 async function readDeviceTreeCell(read, path) {
   try {
     const value = await read(path);
@@ -89,6 +105,8 @@ export async function deviceTreeInstalledMemory({
 export async function linuxInstalledMemory({
   list = readdir,
   read = readFile,
+  hardwareFile = "/var/lib/haus-host-telemetry/installed-memory.json",
+  now = Date.now,
 } = {}) {
   try {
     const entries = await list("/sys/firmware/dmi/entries");
@@ -101,11 +119,39 @@ export async function linuxInstalledMemory({
           read(`/sys/firmware/dmi/entries/${name}/raw`).catch(() => null),
         ),
       );
-      const total = parseDmiInstalledMemory(raw);
+      const total = raw.every(Buffer.isBuffer)
+        ? parseDmiInstalledMemory(raw)
+        : null;
       if (total !== null) return total;
     }
   } catch {
     /* ARM systems commonly have no SMBIOS table. */
   }
-  return deviceTreeInstalledMemory({ list, read });
+  const pi = raspberryInstalledMemory(
+    await read("/proc/cpuinfo", "utf8").catch(() => ""),
+  );
+  if (pi !== null) return pi;
+  const tree = await deviceTreeInstalledMemory({ list, read });
+  if (tree !== null) return tree;
+  if (hardwareFile) {
+    try {
+      const [bytes, boot] = await Promise.all([
+        read(hardwareFile, "utf8"),
+        read("/proc/sys/kernel/random/boot_id", "utf8"),
+      ]);
+      if (bytes.length > 1024) return null;
+      const value = JSON.parse(bytes);
+      const age = now() - Date.parse(value.sampledAt);
+      if (
+        value.version === 1 &&
+        value.bootId === boot.trim() &&
+        age >= -5000 &&
+        age <= 120000
+      )
+        return safeSize(value.installedBytes);
+    } catch {
+      /* A privileged probe is optional; never estimate fitted DIMMs. */
+    }
+  }
+  return null;
 }
