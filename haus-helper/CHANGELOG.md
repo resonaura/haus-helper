@@ -1,3 +1,7 @@
+# 0.3.40
+
+- Match Supervisor whole-host CPU percentage accounting when deriving one-shot cumulative counters. Declare the service group CPU units explicitly so clients do not normalize ready percentages twice. Keep measurement gaps and missing counters unknown.
+
 # 0.3.39
 
 - Expose actual Home Assistant OS system services from the read-only Supervisor host-services API. Whitelist unit identity, description and state, and preserve missing process resource counters as unknown. No new permissions or service control operations.

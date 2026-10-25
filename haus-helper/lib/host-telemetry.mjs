@@ -163,12 +163,11 @@ export class HostTelemetry {
       (Date.now() < this.deadline ? await this.supervisor(path) : null);
     if (!stats) return null;
     // Supervisor one-shot samples expose cumulative counters but no measurement
-    // window. Calculate Docker's per-core percentage across our bounded polls.
+    // window. Match Supervisor's whole-host percentage across our bounded polls.
     const previous = this.cpuSamples.get(path);
     const at = Date.now();
     const usage = nullableNumber(stats.cpu_usage);
     const system = nullableNumber(stats.cpu_system_usage);
-    const cores = nullableNumber(stats.online_cpus);
     let percent = nullableNumber(stats.cpu_percent);
     if (
       percent === null &&
@@ -176,13 +175,12 @@ export class HostTelemetry {
       at - previous.at <= 60000 &&
       usage !== null &&
       system !== null &&
-      cores > 0 &&
       usage >= previous.usage &&
       system > previous.system
     )
       percent = Math.min(
-        cores * 100,
-        ((usage - previous.usage) / (system - previous.system)) * cores * 100,
+        100,
+        ((usage - previous.usage) / (system - previous.system)) * 100,
       );
     if (usage !== null && system !== null)
       this.cpuSamples.set(path, { usage, system, at });
@@ -421,6 +419,7 @@ export class HostTelemetry {
           ? {
               available: true,
               source: "supervisor",
+              cpuPercentBasis: "host",
               containers: containers.sort((a, b) =>
                 a.name.localeCompare(b.name),
               ),
