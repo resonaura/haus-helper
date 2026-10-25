@@ -188,12 +188,14 @@ export class HostTelemetry {
     else this.cpuSamples.delete(path);
     return { ...stats, cpu_percent: percent };
   }
-  async collect(at) {
-    if (
-      this.value &&
-      !this.config.standalone &&
-      at - this.inventoryAt < 10000
-    ) {
+  async collect(at, inventory = false) {
+    if (this.value && !this.config.standalone && !inventory) {
+      if (!this.inventoryRefresh && at - this.inventoryAt >= 10000)
+        this.inventoryRefresh = this.collect(at, true)
+          .catch(() => {})
+          .finally(() => {
+            this.inventoryRefresh = undefined;
+          });
       const [stat, meminfo, uptime, loadavg] = await Promise.all(
         ["stat", "meminfo", "uptime", "loadavg"].map((name) =>
           this.read(`/proc/${name}`, "utf8").catch(() => null),
@@ -217,6 +219,7 @@ export class HostTelemetry {
           ),
         );
       this.previousCpu = proc.cpuTimes;
+      this.latestProcAt = at;
       this.value = {
         ...this.value,
         sampledAt: new Date(at).toISOString(),
@@ -290,7 +293,10 @@ export class HostTelemetry {
               (proc.cpuTimes.total - this.previousCpu.total),
         ),
       );
-    this.previousCpu = proc?.cpuTimes;
+    if (this.latestProcAt === undefined || at >= this.latestProcAt) {
+      this.previousCpu = proc?.cpuTimes;
+      this.latestProcAt = at;
+    }
     const disks = homeAssistantDisks({
       hardware,
       diskInfo,
@@ -420,6 +426,22 @@ export class HostTelemetry {
           : unavailable(),
       pm2: { available: false, source: "unavailable", processes: [] },
     };
+    if (inventory && this.value && Date.parse(this.value.sampledAt) >= at) {
+      const latest = this.value;
+      host.sampledAt = latest.sampledAt;
+      host.cpu = {
+        ...host.cpu,
+        usage: latest.cpu.usage,
+        loadAverage: latest.cpu.loadAverage,
+      };
+      host.memory = {
+        ...latest.memory,
+        installedBytes:
+          host.memory.installedBytes ?? latest.memory.installedBytes,
+      };
+      host.swap = latest.swap;
+      host.uptimeSeconds = latest.uptimeSeconds;
+    }
     this.value = host;
     return host;
   }

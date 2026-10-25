@@ -391,3 +391,25 @@ test("visible-dashboard CPU/memory samples refresh after one second without requ
   assert.equal(f.calls.length, inventoryCalls);
   assert.deepEqual(second.servers[0].host.disks, first.servers[0].host.disks);
 });
+
+test("slow Supervisor metadata cannot hold the resource API behind its inventory refresh", async (t) => {
+  const f = await fixture(t);
+  await f.servers.status();
+  const original = f.servers.telemetry.fetcher;
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  f.servers.telemetry.fetcher = async (...args) => {
+    await gate;
+    return original(...args);
+  };
+  f.advance(10000);
+  const live = await f.servers.status();
+  assert.ok(f.servers.telemetry.inventoryRefresh);
+  assert.ok(Math.abs(live.servers[0].host.cpu.usage - 0.3) < 0.0001);
+  const sampledAt = live.servers[0].host.sampledAt;
+  release();
+  await f.servers.telemetry.inventoryRefresh;
+  assert.equal(f.servers.telemetry.value.sampledAt, sampledAt);
+});
