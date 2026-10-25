@@ -82,7 +82,8 @@ export class Servers {
   }
   async primary() {
     const at = this.now();
-    if (this.cached && at - this.cachedAt < 1000) return this.cached;
+    // Coalesce callers without aliasing a one-second UI timer into two-second updates.
+    if (this.cached && at - this.cachedAt < 250) return this.cached;
     if (this.loading) return this.loading;
     this.loading = this.collect(at)
       .then((value) => {
