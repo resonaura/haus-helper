@@ -373,11 +373,11 @@ test(
   },
 );
 
-test("visible-dashboard CPU/memory samples refresh after one second without requerying Supervisor inventory", async (t) => {
+test("slightly early one-second polls refresh CPU/memory instead of returning a second cached sample", async (t) => {
   const f = await fixture(t);
   const first = await f.servers.status();
   const inventoryCalls = f.calls.length;
-  f.advance(1000);
+  f.advance(995);
   const second = await f.servers.status();
   assert.notEqual(
     second.servers[0].host.sampledAt,

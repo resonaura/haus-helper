@@ -86,10 +86,10 @@ test("health refreshes coalesce, cache completed attempts and retry after the bo
   await first;
   assert.equal(requests, 1);
   await f.cluster.refreshHealth();
-  f.advance(999);
+  f.advance(249);
   await f.cluster.refreshHealth();
   assert.equal(requests, 1);
-  f.advance(1);
+  f.advance(746);
   await f.cluster.refreshHealth();
   assert.equal(requests, 2);
   const forced = f.cluster.refreshHealth({ force: true });

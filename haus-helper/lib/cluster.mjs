@@ -237,7 +237,7 @@ export class Cluster {
       !force &&
       this.healthSampledAt !== undefined &&
       at >= this.healthSampledAt &&
-      at - this.healthSampledAt < 1000
+      at - this.healthSampledAt < 250
     )
       return Promise.resolve();
     const revision = this.healthRevision;

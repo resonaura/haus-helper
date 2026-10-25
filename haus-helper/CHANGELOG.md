@@ -1,3 +1,7 @@
+# 0.3.38
+
+- Prevent server resource reads from aliasing one-second clocks into two-second updates. Coalesce simultaneous callers for 250 ms while preserving non-overlapping collection, slow-inventory separation and source timestamps.
+
 # 0.3.37
 
 - Deliver visible server CPU, memory and swap samples at one-second cadence. Keep Supervisor hardware/disk/service inventory on its slower path and coalesce peer refreshes independently of replication work. No camera, storage quota or backup policy changes.
