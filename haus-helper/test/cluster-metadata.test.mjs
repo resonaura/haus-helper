@@ -7,6 +7,10 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Store } from "../lib/store.mjs";
 import { Cluster } from "../lib/cluster.mjs";
+import {
+  archiveStorageMetadata,
+  refreshArchiveStorageMetadata,
+} from "../lib/archive-storage-metadata.mjs";
 
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "haus-cluster-metadata-"));
@@ -122,6 +126,71 @@ test("old NVR catalogs migrate in bounded batches without uploading existing blo
       )
       .get().n,
     10,
+  );
+});
+
+test("archive storage classification repairs legacy catalogs in bounded batches without uploading or selecting originals over prepared media", async (t) => {
+  const f = await fixture(t);
+  f.cluster.health.get("fixture-node").remote.storage.usage = { version: 1 };
+  for (let i = 0; i < 10; i++) {
+    const event = await f.event(i);
+    f.store.setPlayback(event.id, 20, 9);
+    const original = "a".repeat(64),
+      prepared = i.toString(16).padStart(64, "b");
+    for (const [variant, digest, version] of [
+      ["original", original, 0],
+      ["prepared", prepared, 9],
+    ]) {
+      f.store.db
+        .prepare(
+          "INSERT INTO event_archive(event_id,variant,digest,bytes,version)VALUES(?,?,?,?,?)",
+        )
+        .run(event.id, variant, digest, 20, version);
+      f.store.db
+        .prepare(
+          "INSERT INTO event_archive_locations(event_id,variant,node_id,digest,bytes,version,verified_at)VALUES(?,?,?,?,?,?,?)",
+        )
+        .run(
+          event.id,
+          variant,
+          "fixture-node",
+          digest,
+          20,
+          version,
+          Date.now(),
+        );
+    }
+    assert.equal(
+      archiveStorageMetadata(f.store, f.store.get(event.id), prepared).variant,
+      "prepared",
+    );
+  }
+  f.fail(true);
+  await refreshArchiveStorageMetadata(f.cluster);
+  assert.equal(f.posted.length, 0);
+  f.fail(false);
+  f.cluster.storageMetadataCursor = 0;
+  await refreshArchiveStorageMetadata(f.cluster);
+  assert.equal(f.posted.length, 8);
+  await refreshArchiveStorageMetadata(f.cluster);
+  assert.equal(f.posted.length, 10);
+  await refreshArchiveStorageMetadata(f.cluster);
+  await refreshArchiveStorageMetadata(f.cluster);
+  assert.equal(
+    f.posted.length,
+    10,
+    "identical classifications coalesce after cursor wraps",
+  );
+  assert.ok(
+    f.posted.every(
+      (item) =>
+        item.variant === "prepared" && item.originalDigest === "a".repeat(64),
+    ),
+  );
+  assert.ok(
+    f.requests.every(
+      (item) => item.method === "POST" && item.url === "/v1/recordings",
+    ),
   );
 });
 

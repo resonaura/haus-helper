@@ -1,7 +1,10 @@
 import { archivePending, archivedMedia } from "./recording-archive.mjs";
 import { RecordingCache } from "./recording-cache.mjs";
 import { randomUUID, createHash } from "node:crypto";
-import { recordingMetadata } from "./recording-metadata.mjs";
+import {
+  archiveStorageMetadata,
+  refreshArchiveStorageMetadata,
+} from "./archive-storage-metadata.mjs";
 import { stat } from "node:fs/promises";
 import { nodeAddress, nodeRequest, nodeJson } from "./node-client.mjs";
 import { fileDigest } from "./backups.mjs";
@@ -334,7 +337,11 @@ export class Cluster {
             .prepare("SELECT event_id FROM cluster_media WHERE digest=?")
             .get(digest);
           if (!row) continue;
-          metadata = recordingMetadata(this.store.get(row.event_id));
+          metadata = archiveStorageMetadata(
+            this.store,
+            this.store.get(row.event_id),
+            digest,
+          );
           metadataHash = createHash("sha256")
             .update(JSON.stringify(metadata))
             .digest("hex");
@@ -402,7 +409,7 @@ export class Cluster {
             method: "POST",
             data: {
               digest,
-              event: metadata,
+              ...metadata,
             },
             signal: this.abort.signal,
           });
@@ -509,6 +516,7 @@ export class Cluster {
       }
       await this.refreshHealth({ force: true });
       await archivePending(this);
+      await refreshArchiveStorageMetadata(this);
       await this.refreshHealth({ force: true });
       await this.recordingCache?.trim();
       await this.prune(peers);

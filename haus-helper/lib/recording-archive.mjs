@@ -1,9 +1,9 @@
 import { stat } from "node:fs/promises";
 import { fileDigest } from "./backups.mjs";
 import { nodeJson, nodeRequest } from "./node-client.mjs";
-import { recordingMetadata } from "./recording-metadata.mjs";
 import { playbackReady, PLAYBACK_VERSION } from "./playback.mjs";
 import { ORIGINAL_POLICY_VERSION } from "./playback-compatible.mjs";
+import { archiveStorageMetadata } from "./archive-storage-metadata.mjs";
 
 export const variantExtension = (variant) =>
   variant === "prepared" ? "playback.mp4" : "mp4";
@@ -147,7 +147,11 @@ export async function archiveEvent(cluster, id) {
               method: "POST",
               data: {
                 digest: descriptor.digest,
-                event: recordingMetadata(event),
+                ...archiveStorageMetadata(
+                  cluster.store,
+                  event,
+                  descriptor.digest,
+                ),
               },
               signal: cluster.abort.signal,
             });

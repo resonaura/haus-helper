@@ -1,3 +1,7 @@
+# 0.3.43
+
+- Measure per-component managed Haus file usage in the background, including actual local originals/prepared video, pre-event buffers, snapshots, encrypted backups and databases. Separate file sizes from allocated blocks, deduplicate hard links, avoid following symlinks and retain partial/unknown measurements. Repair old NVR catalog roles through bounded metadata-only updates, preserving prepared playback and original bytes. No quota, retention, camera transport or backup-policy changes.
+
 # 0.3.40
 
 - Match Supervisor whole-host CPU percentage accounting when deriving one-shot cumulative counters. Declare the service group CPU units explicitly so clients do not normalize ready percentages twice. Keep measurement gaps and missing counters unknown.

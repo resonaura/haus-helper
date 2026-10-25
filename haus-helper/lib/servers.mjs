@@ -1,5 +1,6 @@
 import { readFile, readdir, statfs } from "node:fs/promises";
 import { HostTelemetry } from "./host-telemetry.mjs";
+import { helperStorageUsage } from "./helper-storage-usage.mjs";
 export { parseHostCpuModel, parseHostProc } from "./host-telemetry.mjs";
 
 export class Servers {
@@ -32,6 +33,7 @@ export class Servers {
       list,
       filesystem,
     });
+    this.storageUsage = helperStorageUsage(config, backups);
     store.db.exec(
       "CREATE TABLE IF NOT EXISTS service_policy (id TEXT PRIMARY KEY,value TEXT NOT NULL)",
     );
@@ -128,6 +130,7 @@ export class Servers {
       host,
       settings: { ...this.policy },
       storage: {
+        ...(this.storageUsage ? { usage: this.storageUsage.status() } : {}),
         usedBytes,
         localBytes: usedBytes,
         archivedBytes: totals.archivedBytes,
