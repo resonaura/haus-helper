@@ -1,3 +1,7 @@
+# 0.3.39
+
+- Expose actual Home Assistant OS system services from the read-only Supervisor host-services API. Whitelist unit identity, description and state, and preserve missing process resource counters as unknown. No new permissions or service control operations.
+
 # 0.3.38
 
 - Prevent server resource reads from aliasing one-second clocks into two-second updates. Coalesce simultaneous callers for 250 ms while preserving non-overlapping collection, slow-inventory separation and source timestamps.

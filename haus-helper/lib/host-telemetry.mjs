@@ -2,6 +2,7 @@ import { readFile, readdir, statfs } from "node:fs/promises";
 import { homeAssistantDisks } from "./host-disks.mjs";
 import { homeAssistantGraphics } from "./host-gpus.mjs";
 import { linuxInstalledMemory } from "./host-memory.mjs";
+import { homeAssistantServices } from "./host-services.mjs";
 
 const nullableNumber = (value) =>
   Number.isFinite(value) && value >= 0 ? value : null;
@@ -257,6 +258,7 @@ export class HostTelemetry {
       hardware,
       mountinfo,
       mediaFilesystem,
+      systemServices,
     ] = await Promise.all([
       this.supervisor("/host/info"),
       this.supervisor("/core/info"),
@@ -273,6 +275,7 @@ export class HostTelemetry {
       this.supervisor("/hardware/info"),
       this.read("/proc/self/mountinfo", "utf8").catch(() => ""),
       this.filesystem(this.config.media).catch(() => null),
+      this.supervisor("/host/services"),
     ]);
     const proc =
       files?.[0] && files?.[1]
@@ -425,6 +428,7 @@ export class HostTelemetry {
             }
           : unavailable(),
       pm2: { available: false, source: "unavailable", processes: [] },
+      systemServices: homeAssistantServices(systemServices, at),
     };
     if (inventory && this.value && Date.parse(this.value.sampledAt) >= at) {
       const latest = this.value;
