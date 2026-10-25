@@ -191,3 +191,27 @@ test("an exited one-shot with no remaining cgroup has zero current resource use"
   assert.equal(report.cpuPercent, 0);
   f.reader.stop();
 });
+
+test("a connection that never completes its handshake is closed instead of accumulating queued requests", async () => {
+  const connection = new EventEmitter();
+  let destroyed = false;
+  connection.stream = {
+    destroy() {
+      destroyed = true;
+    },
+  };
+  const bus = {
+    cookies: {},
+    connection,
+    invoke(message, callback) {
+      message.serial = 1;
+      this.cookies[1] = callback;
+    },
+  };
+  const reader = new HostServiceCounters({ factory: () => bus });
+  assert.equal(await reader.collect(), null);
+  assert.equal(destroyed, true);
+  assert.equal(reader.pending.size, 0);
+  assert.equal(Object.keys(bus.cookies).length, 0);
+  reader.stop();
+});

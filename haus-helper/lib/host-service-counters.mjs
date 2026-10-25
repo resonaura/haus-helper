@@ -84,7 +84,11 @@ export class HostServiceCounters {
         if (message.serial) delete bus.cookies[message.serial];
         error ? reject(Error("host_bus_read_failed")) : resolve(value);
       };
-      const timer = setTimeout(() => finish(Error("host_bus_timeout")), 600);
+      const timer = setTimeout(() => {
+        finish(Error("host_bus_timeout"));
+        if (bus.connection.state !== "connected" && this.bus === bus)
+          this.disconnect();
+      }, 600);
       this.pending.add(finish);
       try {
         bus.invoke(message, finish);
