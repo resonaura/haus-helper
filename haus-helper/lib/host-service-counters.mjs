@@ -58,6 +58,9 @@ export class HostServiceCounters {
     if (!this.bus) {
       this.bus = this.factory();
       const bus = this.bus;
+      // Passive telemetry must not keep a process alive after its owner stops.
+      // Individual reads have bounded, referenced deadline timers of their own.
+      bus.connection.stream?.unref?.();
       const failed = () => {
         if (this.bus === bus) this.disconnect();
       };
