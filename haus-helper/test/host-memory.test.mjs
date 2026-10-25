@@ -26,7 +26,7 @@ function cell64(value) {
   return raw;
 }
 
-test("sums installed SMBIOS module capacities and ignores empty slots", () => {
+test("sums installed SMBIOS memory module capacities and ignores empty slots", () => {
   assert.equal(
     parseDmiInstalledMemory([
       memoryDevice(8192),
@@ -39,7 +39,7 @@ test("sums installed SMBIOS module capacities and ignores empty slots", () => {
   assert.equal(parseDmiInstalledMemory([memoryDevice(0xffff)]), null);
 });
 
-test("reads nominal RAM from ARM device-tree banks when SMBIOS is absent", async () => {
+test("reads nominal memory from ARM device-tree banks when SMBIOS is absent", async () => {
   const root = "/fixture/tree";
   const values = new Map([
     [`${root}/#address-cells`, cell(2)],
@@ -63,4 +63,76 @@ test("reads nominal RAM from ARM device-tree banks when SMBIOS is absent", async
     6 * 1024 ** 3,
   );
   assert.equal(await linuxInstalledMemory({ list, read }), null);
+});
+
+test("Raspberry Pi nominal RAM comes from the documented board revision, never usable MemTotal", async () => {
+  const { raspberryInstalledMemory } = await import("../lib/host-memory.mjs");
+  assert.equal(
+    raspberryInstalledMemory("Hardware : BCM2835\nRevision : c03112\n"),
+    4 * 1024 ** 3,
+  );
+  assert.equal(
+    raspberryInstalledMemory(
+      "Model : Raspberry Pi 5 Model B\nRevision : e04171\n",
+    ),
+    16 * 1024 ** 3,
+  );
+  assert.equal(raspberryInstalledMemory("Revision : c03112\n"), null);
+  assert.equal(
+    raspberryInstalledMemory("Model : Raspberry Pi\nRevision : f04171\n"),
+    null,
+  );
+  assert.equal(
+    await linuxInstalledMemory({
+      list: async () => [],
+      read: async (path) =>
+        path === "/proc/cpuinfo"
+          ? "Hardware : BCM2835\nRevision : d03114\n"
+          : Promise.reject(Error("missing")),
+    }),
+    8 * 1024 ** 3,
+  );
+});
+
+test("restricted DMI can use a fresh boot-bound sanitized hardware probe; stale and partial data remain unknown", async () => {
+  const at = Date.now();
+  let record = {
+    version: 1,
+    installedBytes: 16 * 1024 ** 3,
+    bootId: "boot",
+    sampledAt: new Date(at).toISOString(),
+  };
+  const read = async (path) =>
+    path === "/fixture/memory"
+      ? JSON.stringify(record)
+      : path === "/proc/sys/kernel/random/boot_id"
+        ? "boot\n"
+        : Promise.reject(Error("denied"));
+  const options = {
+    read,
+    list: async () => [],
+    hardwareFile: "/fixture/memory",
+    now: () => at,
+  };
+  assert.equal(await linuxInstalledMemory(options), 16 * 1024 ** 3);
+  record = { ...record, bootId: "other" };
+  assert.equal(await linuxInstalledMemory(options), null);
+  record = {
+    ...record,
+    bootId: "boot",
+    sampledAt: new Date(at - 120001).toISOString(),
+  };
+  assert.equal(await linuxInstalledMemory(options), null);
+  assert.equal(
+    await linuxInstalledMemory({
+      ...options,
+      list: async (path) =>
+        path === "/sys/firmware/dmi/entries" ? ["17-0", "17-1"] : [],
+      read: async (path) =>
+        path.endsWith("17-0/raw")
+          ? memoryDevice(8192)
+          : Promise.reject(Error("denied")),
+    }),
+    null,
+  );
 });
