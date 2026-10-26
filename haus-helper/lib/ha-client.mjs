@@ -106,13 +106,14 @@ export class HaClient extends EventEmitter {
     });
   }
   async registry() {
-    const [states, entities, devices] = await Promise.all([
+    const [states, entities, devices, areas] = await Promise.all([
       this.request({ type: "get_states" }),
       this.request({ type: "config/entity_registry/list" }),
       this.request({ type: "config/device_registry/list" }),
+      this.request({ type: "config/area_registry/list" }),
     ]);
     this.inputRegistry = { states, entities };
-    return { states, entities, devices };
+    return { states, entities, devices, areas };
   }
   primaryRecordingInput(camera) {
     const direct = directRecordingInput(

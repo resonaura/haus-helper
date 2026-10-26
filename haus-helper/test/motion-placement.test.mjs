@@ -96,6 +96,7 @@ test("reports the prospective and actual processor while analysis stays opt-in",
     },
   ]);
   assert.deepEqual(motion.status("camera.test"), {
+    fresh: false,
     state: "off",
     processor: "idle",
     placement: "nvr",
@@ -108,6 +109,7 @@ test("reports the prospective and actual processor while analysis stays opt-in",
   motion.localSupported = true;
   motion.capacity = { detectors: 1, pressured: false };
   assert.deepEqual(motion.status("camera.test"), {
+    fresh: false,
     state: "off",
     processor: "Home Assistant",
     placement: "home",

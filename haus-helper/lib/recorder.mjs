@@ -376,7 +376,8 @@ export class Recorder {
         const camera = this.cameras?.find((item) => item.id === event.cameraId);
         const activeSensors =
           camera?.enabled && camera.available && this.config.recording_enabled
-            ? camera.sensors.filter((sensor) => sensor.active)
+            ? (this.activitySensors?.(camera) ??
+              camera.sensors.filter((sensor) => sensor.active))
             : [];
         const held =
           activeSensors.length > 0 &&

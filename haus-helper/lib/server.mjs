@@ -65,6 +65,7 @@ export function createApi({
   shared,
   warm,
   motion,
+  activity,
   cameraSessions,
   servers = store?.db
     ? new Servers({ config, ha, store, cluster, backups })
@@ -245,6 +246,7 @@ export function createApi({
             previewPreheat: true,
             nvrCameraSessions: !!cameraSessions,
             softwareMotion: !!motion,
+            unifiedActivity: !!activity,
             customTalkback: true,
             recordingRepair: true,
             verifiedOriginalPlayback: true,
@@ -268,6 +270,7 @@ export function createApi({
             getRegistry().cameras.map(async (camera) => ({
               ...publicCamera(camera),
               ...(motion ? { motionStatus: motion.status(camera.id) } : {}),
+              ...(activity ? { activity: activity.status(camera.id) } : {}),
               talkAvailable: await talkback.available(camera, getRegistry()),
             })),
           ),
