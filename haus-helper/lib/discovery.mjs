@@ -1,3 +1,4 @@
+import { isHausActivity } from "./camera-activity.mjs";
 const tokens = (text) =>
   String(text ?? "")
     .toLowerCase()
@@ -24,6 +25,7 @@ const tokens = (text) =>
         ].includes(value),
     );
 export function detectionKind(entity) {
+  if (isHausActivity(entity)) return undefined;
   const domain = entity.entity_id.split(".")[0];
   if (!["binary_sensor", "event"].includes(domain)) return undefined;
   const text =
@@ -99,6 +101,35 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
     if (names(primary) === names(camera)) aliasOwner.set(camera.id, publicId);
   }
   const cameras = allCameras.filter((camera) => !aliasOwner.has(camera.id));
+  const cameraNative = (camera, sensorDevice) => {
+    if (!sensorDevice) return false;
+    if (camera.deviceIds?.includes(sensorDevice.id)) return true;
+    const normalize = (value) =>
+      String(value ?? "")
+        .toLowerCase()
+        .replace(/[^\p{L}\p{N}]+/gu, " ")
+        .trim();
+    const physical =
+      camera.deviceIds
+        ?.map((id) => deviceMap.get(id))
+        .filter(
+          (device) =>
+            device?.manufacturer &&
+            !["Generic", "Home Assistant"].includes(device.manufacturer),
+        ) ?? [];
+    return physical.some(
+      (device) =>
+        normalize(device.manufacturer) ===
+          normalize(sensorDevice.manufacturer) &&
+        [device.name, device.name_by_user]
+          .filter(Boolean)
+          .some(
+            (name) =>
+              normalize(sensorDevice.name_by_user ?? sensorDevice.name) ===
+              normalize(`${name} Motion Sensor`),
+          ),
+    );
+  };
   for (const camera of cameras) {
     camera.aliases = [...aliasOwner]
       .filter(([, id]) => id === camera.id)
@@ -142,6 +173,7 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
     );
   }
   for (const state of visible) {
+    if (isHausActivity(state, registry.get(state.entity_id))) continue;
     const kind = detectionKind(state);
     if (!kind) continue;
     const sensor = registry.get(state.entity_id) ?? {};
@@ -156,10 +188,12 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
       name: state.attributes.friendly_name ?? state.entity_id,
       kind,
       active: state.state === "on",
+      available: !["unknown", "unavailable"].includes(state.state),
       source: "device",
     };
     if (own.length) {
-      for (const camera of own) camera.sensors.push({ ...descriptor });
+      for (const camera of own)
+        camera.sensors.push({ ...descriptor, cameraNative: true });
       continue;
     }
     const names = tokens(
@@ -182,7 +216,11 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
       .filter((item) => item.score >= 6)
       .sort((a, b) => b.score - a.score);
     if (ranked.length && (!ranked[1] || ranked[0].score > ranked[1].score))
-      ranked[0].camera.sensors.push({ ...descriptor, source: "name" });
+      ranked[0].camera.sensors.push({
+        ...descriptor,
+        source: "name",
+        cameraNative: cameraNative(ranked[0].camera, device),
+      });
     else
       for (const { camera } of ranked)
         camera.suggested.push({ ...descriptor, source: "suggestion" });
@@ -192,7 +230,10 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
     if (Array.isArray(camera.manualSensors))
       camera.sensors = camera.manualSensors.flatMap((id) => {
         const state = byId.get(id);
-        const kind = state && detectionKind(state);
+        const kind =
+          state &&
+          !isHausActivity(state, registry.get(id)) &&
+          detectionKind(state);
         return kind
           ? [
               {
@@ -200,12 +241,33 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
                 name: state.attributes.friendly_name ?? id,
                 kind,
                 active: state.state === "on",
+                available: !["unknown", "unavailable"].includes(state.state),
                 source: "manual",
+                cameraNative: cameraNative(
+                  camera,
+                  deviceMap.get(registry.get(id)?.device_id),
+                ),
               },
             ]
           : [];
       });
     delete camera.manualSensors;
+    // A HA group made solely from this camera's verified native sensors is
+    // another projection of that sensor, not another physical motion device.
+    for (const sensor of camera.sensors) {
+      const members = byId.get(sensor.id)?.attributes?.entity_id;
+      if (
+        registry.get(sensor.id)?.platform === "group" &&
+        Array.isArray(members) &&
+        members.length &&
+        members.every((id) =>
+          camera.sensors.some(
+            (source) => source.id === id && source.cameraNative,
+          ),
+        )
+      )
+        sensor.cameraNative = true;
+    }
   }
   return cameras;
 }

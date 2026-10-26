@@ -3,6 +3,8 @@ import { RecentPlayback } from "./recent-playback.mjs";
 import { WarmStreams } from "./warm-streams.mjs";
 import { NvrCameraSessions } from "./nvr-camera-sessions.mjs";
 import { Motion } from "./motion.mjs";
+import { CameraActivity } from "./camera-activity.mjs";
+import { ActivityMqtt } from "./activity-mqtt.mjs";
 import { SharedConfig } from "./shared-config.mjs";
 import { Backups } from "./backups.mjs";
 import { Cluster } from "./cluster.mjs";
@@ -31,15 +33,30 @@ cluster.enableRecordingCache(config);
 let registry = { states: [], entities: [], devices: [], cameras: [] };
 let refreshing;
 let dirty = false;
-const cameraSessions = new NvrCameraSessions({ config, store, cluster, registry: () => registry });
+const cameraSessions = new NvrCameraSessions({
+  config,
+  store,
+  cluster,
+  registry: () => registry,
+});
 const recorder = new Recorder(config, ha, store, undefined, {
   prepareRemote: (event, options) => cluster.preparePlayback(event, options),
   capture: cameraSessions,
 });
 const availability = new CameraAvailability();
 const recentPlayback = new RecentPlayback(store, recorder, cluster);
-const warm = new WarmStreams(ha, recorder, cluster, { sessions: cameraSessions });
+const warm = new WarmStreams(ha, recorder, cluster, {
+  sessions: cameraSessions,
+});
 const motion = new Motion({ ha, recorder, cluster, warm, config });
+const activity = new CameraActivity({ recorder, motion });
+const activityMqtt = new ActivityMqtt({
+  ha,
+  activity,
+  registry: () => registry,
+});
+motion.onDetection = (id, event) => activity.software(id, event);
+recorder.activitySensors = (camera) => activity.activeSensors(camera);
 await motion.initialize();
 const observeAvailability = () => {
   const at = Date.now();
@@ -71,13 +88,14 @@ const apply = () => {
   recorder.sync(registry.cameras);
   warm.sync(registry.cameras);
   motion.sync(registry.cameras);
+  activity.sync(registry.cameras);
   observeAvailability();
   if (config.recording_enabled)
     for (const camera of registry.cameras) {
       if (camera.available && camera.enabled && !recorder.active.has(camera.id))
         for (const sensor of camera.sensors.filter((item) => item.active)) {
           try {
-            recorder.trigger(camera.id, sensor.kind, sensor.id);
+            activity.native(camera.id, sensor.kind, sensor.id);
           } catch {
             /* Recording budgets can pause new events without blocking discovery. */
           }
@@ -103,6 +121,7 @@ const refresh = async () => {
   await refreshing;
 };
 ha.on("ready", () => {
+  activityMqtt.reset();
   void refresh().catch(() =>
     console.warn("Camera discovery will retry after reconnection"),
   );
@@ -128,7 +147,12 @@ ha.on("event", (event) => {
     availability.apply(registry.cameras, registry.states, recorder.buffers);
   for (const camera of registry.cameras) {
     for (const sensor of camera.sensors)
-      if (sensor.id === id) sensor.active = next?.state === "on";
+      if (sensor.id === id) {
+        sensor.active = next?.state === "on";
+        sensor.available = Boolean(
+          next && !["unknown", "unavailable"].includes(next.state),
+        );
+      }
     if (
       camera.enabled &&
       camera.available &&
@@ -137,7 +161,7 @@ ha.on("event", (event) => {
       camera.sensors.some((sensor) => sensor.id === id)
     ) {
       try {
-        recorder.trigger(camera.id, detectionKind(next), id);
+        activity.native(camera.id, detectionKind(next), id);
       } catch {}
     }
   }
@@ -160,6 +184,7 @@ const server = createApi({
   shared,
   warm,
   motion,
+  activity,
   cameraSessions,
 });
 await recorder.initialize();
@@ -199,7 +224,17 @@ const recentPreparation = setInterval(
   2000,
 );
 const warming = setInterval(() => void warm.tick().catch(() => {}), 4000);
-const detection = setInterval(() => void motion.tick().catch(() => {}), 4000);
+const detection = setInterval(
+  () =>
+    void motion
+      .tick()
+      .then(() => {
+        activity.tick();
+        return activityMqtt.tick();
+      })
+      .catch(() => {}),
+  4000,
+);
 const availabilityHeartbeat = setInterval(() => {
   if (availability.apply(registry.cameras, registry.states, recorder.buffers)) {
     recorder.sync(registry.cameras);
@@ -216,6 +251,7 @@ async function stop() {
   clearInterval(warming);
   clearInterval(detection);
   await motion.stop();
+  await activityMqtt.stop();
   await warm.stop();
   clearInterval(maintenance);
   clearInterval(distribution);

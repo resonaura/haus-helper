@@ -239,3 +239,63 @@ test("playback provenance follows one registered physical source through an expl
     undefined,
   );
 });
+
+test("unifies only the camera's matching Matter projection, preserving independent Hue motion", () => {
+  const states = [
+    state("camera.pigs", "Guinea Pigs Camera"),
+    state(
+      "binary_sensor.pigs_matter",
+      "Guinea Pigs Camera Motion Sensor",
+      "motion",
+    ),
+    state("binary_sensor.pigs_hue", "Guinea Pigs Motion Sensor", "motion"),
+    {
+      ...state(
+        "binary_sensor.pigs_activity",
+        "Guinea Pigs Camera Activity",
+        "motion",
+      ),
+      attributes: {
+        haus_activity_version: 1,
+        haus_camera: "camera.pigs",
+        device_class: "motion",
+      },
+    },
+  ];
+  const entities = [
+    { entity_id: "camera.pigs", device_id: "camera", platform: "mqtt" },
+    {
+      entity_id: "binary_sensor.pigs_matter",
+      device_id: "matter",
+      platform: "matter",
+    },
+    { entity_id: "binary_sensor.pigs_hue", device_id: "hue", platform: "hue" },
+  ];
+  const devices = [
+    { id: "camera", name: "Guinea Pigs Camera", manufacturer: "Aqara" },
+    {
+      id: "matter",
+      name: "Guinea Pigs Camera Motion Sensor",
+      manufacturer: "Aqara",
+    },
+    { id: "hue", name: "Guinea Pigs Motion Sensor", manufacturer: "Signify" },
+  ];
+  const [camera] = discoverCameras(states, entities, devices);
+  assert.equal(
+    camera.sensors.find((s) => s.id === "binary_sensor.pigs_matter")
+      .cameraNative,
+    true,
+  );
+  assert.equal(
+    camera.sensors.find((s) => s.id === "binary_sensor.pigs_hue").cameraNative,
+    false,
+  );
+  assert.ok(!camera.sensors.some((s) => s.id.endsWith("_activity")));
+  devices[1].manufacturer = "Another vendor";
+  assert.equal(
+    discoverCameras(states, entities, devices)[0].sensors.find(
+      (s) => s.id === "binary_sensor.pigs_matter",
+    ).cameraNative,
+    false,
+  );
+});

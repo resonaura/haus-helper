@@ -29,8 +29,18 @@ export class Motion {
     config,
     now = () => Date.now(),
     worker,
+    onDetection,
   }) {
-    Object.assign(this, { ha, recorder, cluster, warm, config, now, worker });
+    Object.assign(this, {
+      ha,
+      recorder,
+      cluster,
+      warm,
+      config,
+      now,
+      worker,
+      onDetection,
+    });
     this.jobs = new Map();
     this.cooldowns = new Map();
     this.cameras = [];
@@ -74,6 +84,14 @@ export class Motion {
         this.capacity.pressured ||
         (!job && [...this.jobs.values()].some((entry) => entry.local)));
     return {
+      fresh: Boolean(
+        job &&
+        Number.isFinite(job.local ? job.worker.lastResult : job.lastResultAt) &&
+        this.now() - (job.local ? job.worker.lastResult : job.lastResultAt) >=
+          -5000 &&
+        this.now() - (job.local ? job.worker.lastResult : job.lastResultAt) <
+          12000,
+      ),
       state: job
         ? job.local
           ? job.worker.state
@@ -126,7 +144,8 @@ export class Motion {
     if (!job) return;
     this.jobs.delete(id);
     if (job.lease) this.warm.leases.delete(job.lease);
-    if (job.sessionOwner) await this.warm.sessions.release(id, job.sessionOwner);
+    if (job.sessionOwner)
+      await this.warm.sessions.release(id, job.sessionOwner);
     if (job.local) await job.worker.stop();
     else
       await nodeRequest(job.node, `/v1/detectors/${job.id}`, {
@@ -150,6 +169,7 @@ export class Motion {
     job.delivered ??= {};
     job.delivered[event.kind] = this.now();
     try {
+      if (this.onDetection) return this.onDetection(camera.id, event);
       this.recorder.trigger(
         camera.id,
         event.kind,
@@ -249,15 +269,29 @@ export class Motion {
     const owner = `assist-${randomUUID()}`;
     for (const node of this.candidates().slice(0, 3)) {
       try {
-        const entry = await this.warm.sessions.ensure(camera, owner, false, node);
+        const entry = await this.warm.sessions.ensure(
+          camera,
+          owner,
+          false,
+          node,
+        );
         const remote = await nodeJson(node, "/v1/detectors", {
           method: "POST",
           data: { cameraSessionId: entry.id, owner, mode },
           timeout: 5000,
           signal: this.abort.signal,
         });
-        if (!/^[a-f0-9-]{36}$/.test(remote.id)) throw new Error("invalid_detector_job");
-        this.jobs.set(camera.id, { id: remote.id, node, sessionId: entry.id, sessionOwner: owner, mode, state: "starting", sequence: 0 });
+        if (!/^[a-f0-9-]{36}$/.test(remote.id))
+          throw new Error("invalid_detector_job");
+        this.jobs.set(camera.id, {
+          id: remote.id,
+          node,
+          sessionId: entry.id,
+          sessionOwner: owner,
+          mode,
+          state: "starting",
+          sequence: 0,
+        });
         if (this.stopped || this.epoch !== epoch) await this.release(camera.id);
         return;
       } catch {
@@ -265,10 +299,24 @@ export class Motion {
         this.cooldowns.set(node.id, this.now() + 30000);
       }
     }
-    if (this.candidates().length || !this.localSupported || [...this.jobs.values()].some((job) => job.local) || !this.capacity?.detectors || this.capacity.pressured || this.stopped || this.epoch !== epoch) return;
+    if (
+      this.candidates().length ||
+      !this.localSupported ||
+      [...this.jobs.values()].some((job) => job.local) ||
+      !this.capacity?.detectors ||
+      this.capacity.pressured ||
+      this.stopped ||
+      this.epoch !== epoch
+    )
+      return;
     const source = nvrCameraSource(camera, this.warm.sessions.registry());
     const job = { local: true, mode };
-    job.worker = new this.worker({ source: source.url, mode, interval: 2500, onDetection: (event) => this.deliver(camera, event, job) });
+    job.worker = new this.worker({
+      source: source.url,
+      mode,
+      interval: 2500,
+      onDetection: (event) => this.deliver(camera, event, job),
+    });
     this.jobs.set(camera.id, job);
   }
   async tick() {
@@ -325,8 +373,14 @@ export class Motion {
               throw new Error("detector_overloaded");
             if (job.entry) job.entry.expires = this.now() + 45000;
             if (job.sessionOwner) {
-              const entry = await this.warm.sessions.ensure(camera, job.sessionOwner, false, job.node);
-              if (entry.id !== job.sessionId) throw new Error("detector_session_replaced");
+              const entry = await this.warm.sessions.ensure(
+                camera,
+                job.sessionOwner,
+                false,
+                job.node,
+              );
+              if (entry.id !== job.sessionId)
+                throw new Error("detector_session_replaced");
             }
             const status = await nodeJson(job.node, `/v1/detectors/${job.id}`, {
               timeout: 4000,
@@ -335,6 +389,7 @@ export class Motion {
             if (!["starting", "running"].includes(status.state))
               throw new Error("detector_failed");
             job.state = status.state;
+            job.lastResultAt = status.lastResultAt;
             for (const event of (status.events ?? []).slice(-64)) {
               if (
                 Number.isSafeInteger(event.sequence) &&
