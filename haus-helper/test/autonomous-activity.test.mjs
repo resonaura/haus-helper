@@ -58,6 +58,9 @@ test("explicit activity authority restores a full assigned worker, fences new-ev
     requests = [],
     captures = new Map();
   let lostAck = true;
+  let holdNextPut = false;
+  const putStarted = Promise.withResolvers(),
+    releasePut = Promise.withResolvers();
   const json = async (node, path, options = {}) => {
     requests.push({ node: node.id, path, ...options });
     if (path === "/v1/camera-activity/trigger") {
@@ -70,6 +73,11 @@ test("explicit activity authority restores a full assigned worker, fences new-ev
       return { recordedEventId: captures.get(options.data.requestId) };
     }
     if (options.method === "PUT") {
+      if (holdNextPut && options.data.cameras.length) {
+        holdNextPut = false;
+        putStarted.resolve();
+        await releasePut.promise;
+      }
       plans.set(node.id, options.data.cameras);
       cluster.health.get(node.id).remote.cameraActivity = {
         cameras: options.data.cameras.map((plan) => ({
@@ -185,4 +193,20 @@ test("explicit activity authority restores a full assigned worker, fences new-ev
     activity.triggerNative(camera.id, "person", "native-camera-person", at),
     false,
   );
+  camera.motionDetection.enabled = true;
+  await activity.ensure(camera, nodes[0]);
+  holdNextPut = true;
+  const updating = activity.syncNode(nodes[0], true);
+  await putStarted.promise;
+  const removing = activity.clearNode(nodes[0].id);
+  await assert.rejects(activity.ensure(camera, nodes[0]), /unavailable/);
+  releasePut.resolve();
+  await updating;
+  await removing;
+  assert.equal(
+    plans.get("a").length,
+    0,
+    "a late policy refresh cannot re-enable inference after acknowledged node revocation",
+  );
+  assert.equal(activity.active(camera.id), undefined);
 });

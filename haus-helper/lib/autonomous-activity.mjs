@@ -15,6 +15,7 @@ export class AutonomousActivity {
     Object.assign(this, { store, config, cluster, sessions, now, json });
     this.sent = new Map();
     this.pending = new Map();
+    this.revokingNodes = new Set();
     store.db.exec(`CREATE TABLE IF NOT EXISTS nvr_activity_policies(
       policy_id TEXT PRIMARY KEY,camera_id TEXT NOT NULL,node_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,revoked_at INTEGER);
@@ -50,6 +51,7 @@ export class AutonomousActivity {
   capable(node) {
     return (
       node?.enabled &&
+      !this.revokingNodes.has(node.id) &&
       node.roles.includes("stream") &&
       this.cluster.health.get(node.id)?.online &&
       this.cluster.health.get(node.id)?.remote?.features
@@ -201,18 +203,24 @@ export class AutonomousActivity {
         ?.autonomousCameraActivity !== 1
     )
       return;
-    await this.json(node, "/v1/camera-activity", {
-      method: "PUT",
-      data: { cameras: [] },
-      timeout: 6000,
-    });
-    this.store.db
-      .prepare(
-        "UPDATE nvr_activity_policies SET revoked_at=? WHERE node_id=? AND revoked_at IS NULL",
-      )
-      .run(this.now(), id);
-    this.cluster.backups?.markChanged?.();
-    this.sent.delete(id);
+    this.revokingNodes.add(id);
+    try {
+      await this.pending.get(id)?.catch(() => {});
+      await this.json(node, "/v1/camera-activity", {
+        method: "PUT",
+        data: { cameras: [] },
+        timeout: 6000,
+      });
+      this.store.db
+        .prepare(
+          "UPDATE nvr_activity_policies SET revoked_at=? WHERE node_id=? AND revoked_at IS NULL",
+        )
+        .run(this.now(), id);
+      this.cluster.backups?.markChanged?.();
+      this.sent.delete(id);
+    } finally {
+      this.revokingNodes.delete(id);
+    }
   }
   authorizes(node, value) {
     const event = value?.event,
