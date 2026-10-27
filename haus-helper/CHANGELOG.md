@@ -1,3 +1,8 @@
+# 0.3.49
+
+- Skip briefly unreachable NVR nodes across camera owners after a network failure, bound warm-lease validation and release replaced source leases without blocking their replacement. Keep per-camera source errors and busy capacity distinct from node failure; recovered healthy owners remain sticky.
+- Publish expiring NVR source-liveness observations on the authenticated home channel independently of HA connectivity. Missing, stale, stopped and disabled sources are never represented as fresh live media.
+
 # 0.3.48
 
 - Add an authenticated live channel for immediate multi-client preference and camera-settings invalidations. Keep it independent of the Home Assistant event connection, send current revision/connection state on reconnect, bound clients/payload/backpressure and retain read-only semantics. No camera transport, storage-policy or credential changes.
