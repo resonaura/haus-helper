@@ -13,6 +13,7 @@ import {
   ORIGINAL_POLICY_VERSION,
 } from "./playback-compatible.mjs";
 import { PLAYBACK_VERSION } from "./playback.mjs";
+import { fileDigest } from "./backups.mjs";
 
 const ownerId = (value) =>
   typeof value === "string" && /^[a-zA-Z0-9_-]{16,100}$/.test(value);
@@ -120,6 +121,8 @@ export class NvrCameraSessions {
     this.closedViewers = new Map();
     this.events = new Map();
     this.eventPending = new Map();
+    this.finalizations = new Map();
+    this.recoveryCursors = new Map();
     this.recordingDiagnostics = new Map();
     this.abort = new AbortController();
     this.recordingOwner = `recording-${randomUUID()}`;
@@ -799,6 +802,23 @@ export class NvrCameraSessions {
     if (job && job.startAt <= event.startAt && job.endAt >= event.endAt)
       return job;
     if (!job) {
+      const receipt = await this.durableRecording(event);
+      if (receipt) {
+        job = {
+          nodeId: receipt.node.id,
+          receipt: receipt.value,
+          cameraId: event.cameraId,
+          startAt: event.startAt,
+          endAt: event.endAt,
+        };
+        this.events.set(event.id, job);
+        this.store.db
+          .prepare(
+            "INSERT OR REPLACE INTO nvr_camera_events(event_id,value)VALUES(?,?)",
+          )
+          .run(event.id, JSON.stringify(job));
+        return job;
+      }
       const entry = await this.ensure(
         this.camera(event.cameraId),
         this.recordingOwner,
@@ -819,6 +839,13 @@ export class NvrCameraSessions {
         eventId: event.id,
         startAt: event.startAt,
         endAt: event.endAt,
+        event: {
+          id: event.id,
+          cameraId: event.cameraId,
+          startAt: event.startAt,
+          endAt: event.endAt,
+          kinds: event.kinds,
+        },
       },
       signal: this.abort.signal,
       timeout: 15000,
@@ -833,11 +860,163 @@ export class NvrCameraSessions {
     return job;
   }
   async finalize(event) {
+    if (this.finalizations.has(event.id))
+      return this.finalizations.get(event.id);
+    const task = this.finalizeRecording(event);
+    this.finalizations.set(event.id, task);
     try {
-      return await this.finalizeRecording(event);
+      return await task;
     } catch (error) {
       this.reportRecordingFailure(event, "finalize", error);
       throw error;
+    } finally {
+      if (this.finalizations.get(event.id) === task)
+        this.finalizations.delete(event.id);
+    }
+  }
+  validateReceipt(value, event) {
+    return (
+      value?.state === "ready" &&
+      value.event?.id === event.id &&
+      value.event.cameraId === event.cameraId &&
+      Number.isSafeInteger(value.event.startAt) &&
+      Number.isSafeInteger(value.event.endAt) &&
+      value.event.startAt <= event.startAt &&
+      value.event.endAt >= event.endAt &&
+      value.event.endAt - value.event.startAt <= 300000 &&
+      /^[a-f0-9]{64}$/.test(value.sha256 ?? "") &&
+      Number.isSafeInteger(value.bytes) &&
+      value.bytes > 0 &&
+      value.bytes <= 1024 ** 3 &&
+      Number.isFinite(value.duration) &&
+      value.duration > 0 &&
+      Number.isFinite(value.mediaStartAt) &&
+      value.mediaStartAt >= 0 &&
+      value.mediaStartAt <= value.event.endAt &&
+      typeof value.audio === "boolean"
+    );
+  }
+  async durableRecording(event, preferredNode) {
+    for (const node of this.cluster
+      .nodes()
+      .filter(
+        (node) =>
+          node.enabled &&
+          (!preferredNode || node.id === preferredNode) &&
+          this.cluster.health.get(node.id)?.online &&
+          this.cluster.health.get(node.id)?.remote?.features
+            ?.cameraRecordingRecovery === 1,
+      )) {
+      try {
+        const value = await this.json(
+          node,
+          `/v1/camera-recordings/${event.id}`,
+          {
+            timeout: 4000,
+            signal: this.abort.signal,
+          },
+        );
+        if (this.validateReceipt(value, event)) return { node, value };
+      } catch {}
+    }
+    return undefined;
+  }
+  async acknowledgeRecording(node, value) {
+    return this.json(node, `/v1/camera-recordings/${value.event.id}`, {
+      method: "POST",
+      data: { sha256: value.sha256 },
+      timeout: 4000,
+      signal: this.abort.signal,
+    });
+  }
+  recoverRecordings() {
+    if (this.recoveryPromise) return this.recoveryPromise;
+    this.recoveryPromise = this.recoverReadyRecordings().finally(() => {
+      this.recoveryPromise = undefined;
+    });
+    return this.recoveryPromise;
+  }
+  async recoverReadyRecordings() {
+    if (
+      this.recovering ||
+      this.stopped ||
+      this.now() - (this.lastRecovery ?? -Infinity) < 10000
+    )
+      return;
+    this.recovering = true;
+    this.lastRecovery = this.now();
+    try {
+      for (const node of this.cluster
+        .nodes()
+        .filter(
+          (node) =>
+            node.enabled &&
+            this.cluster.health.get(node.id)?.online &&
+            this.cluster.health.get(node.id)?.remote?.features
+              ?.cameraRecordingRecovery === 1,
+        )) {
+        try {
+          const cursor = this.recoveryCursors.get(node.id);
+          const result = await this.json(
+            node,
+            "/v1/camera-recordings" +
+              (cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""),
+            {
+              timeout: 4000,
+              signal: this.abort.signal,
+            },
+          );
+          if (!Array.isArray(result.items)) continue;
+          this.recoveryCursors.set(
+            node.id,
+            /^\d{1,16}$/.test(result.nextCursor ?? "")
+              ? result.nextCursor
+              : undefined,
+          );
+          for (const value of (result.items ?? []).slice(0, 16)) {
+            if (this.stopped || !uuid(value.event?.id)) continue;
+            let event = this.store.get(value.event.id);
+            // Unknown camera/events are not inferred from filenames or adopted
+            // into another home's catalog. Autonomous triggers will use the
+            // same explicit authorized metadata path.
+            if (
+              !event ||
+              !this.camera(event.cameraId) ||
+              !this.validateReceipt(value, event)
+            )
+              continue;
+            const release = await this.store.pinMedia(event.id);
+            try {
+              event = this.store.get(event.id);
+              if (!event || !this.validateReceipt(value, event)) continue;
+              if (event.status === "ready") {
+                const descriptor = this.store.db
+                  .prepare(
+                    "SELECT digest FROM event_archive WHERE event_id=? AND variant='original'",
+                  )
+                  .get(event.id);
+                const digest =
+                  descriptor?.digest ??
+                  (event.localOriginal
+                    ? await fileDigest(this.store.path(event.id)).catch(
+                        () => null,
+                      )
+                    : null);
+                if (digest === value.sha256)
+                  await this.acknowledgeRecording(node, value);
+              } else if (
+                ["recording", "interrupted", "failed"].includes(event.status)
+              ) {
+                await this.finalize(event);
+              }
+            } finally {
+              release();
+            }
+          }
+        } catch {}
+      }
+    } finally {
+      this.recovering = false;
     }
   }
   async finalizeRecording(event) {
@@ -846,14 +1025,24 @@ export class NvrCameraSessions {
     if (!node?.enabled) throw missing("camera_recording_node_unavailable");
     const base = `/v1/cameras/sessions/${job.id}/recordings/${event.id}`;
     let result;
+    let durable = await this.durableRecording(event, node.id);
     const deadline = this.now() + 90000;
     do {
-      result = await this.json(node, `${base}/status`, {
-        method: "POST",
-        data: { owner: job.owner },
-        signal: this.abort.signal,
-        timeout: 15000,
-      });
+      if (durable) result = durable.value;
+      else {
+        try {
+          result = await this.json(node, `${base}/status`, {
+            method: "POST",
+            data: { owner: job.owner },
+            signal: this.abort.signal,
+            timeout: 15000,
+          });
+        } catch (error) {
+          durable = await this.durableRecording(event, node.id);
+          if (!durable) throw error;
+          result = durable.value;
+        }
+      }
       if (result.state === "failed") throw missing("camera_recording_failed");
       if (result.state === "ready") break;
       await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -876,12 +1065,16 @@ export class NvrCameraSessions {
     const output = this.store.path(event.id),
       temporary = output.replace(/\.mp4$/, ".nvr.partial.mp4");
     try {
-      const response = await this.request(node, `${base}/media`, {
-        method: "POST",
-        data: { owner: job.owner },
-        signal: this.abort.signal,
-        timeout: 120000,
-      });
+      const response = await this.request(
+        node,
+        durable ? `/v1/blobs/${result.sha256}` : `${base}/media`,
+        {
+          method: durable ? "GET" : "POST",
+          ...(durable ? {} : { data: { owner: job.owner } }),
+          signal: this.abort.signal,
+          timeout: 120000,
+        },
+      );
       if (
         response.status !== 200 ||
         Number(response.headers.get("content-length")) !== result.bytes
@@ -957,13 +1150,16 @@ export class NvrCameraSessions {
       this.store.db
         .prepare("DELETE FROM nvr_camera_events WHERE event_id=?")
         .run(event.id);
-      await this.request(node, base, {
-        method: "DELETE",
-        data: { owner: job.owner },
-        timeout: 5000,
-      })
-        .then((r) => r.body?.cancel())
-        .catch(() => {});
+      if (durable)
+        await this.acknowledgeRecording(node, result).catch(() => {});
+      if (job.id && job.owner)
+        await this.request(node, base, {
+          method: "DELETE",
+          data: { owner: job.owner },
+          timeout: 5000,
+        })
+          .then((r) => r.body?.cancel())
+          .catch(() => {});
     } finally {
       await unlink(temporary).catch(() => {});
     }
@@ -996,6 +1192,7 @@ export class NvrCameraSessions {
         }
       }
       void this.syncContinuity().catch(() => {});
+      void this.recoverRecordings().catch(() => {});
     } finally {
       this.ticking = false;
     }
@@ -1005,6 +1202,8 @@ export class NvrCameraSessions {
     this.abort.abort();
     await Promise.allSettled(this.pending.values());
     await Promise.allSettled(this.eventPending.values());
+    await this.recoveryPromise?.catch(() => {});
+    await Promise.allSettled(this.finalizations.values());
     await Promise.allSettled(
       [...this.entries.values()].map((entry) => this.releaseEntry(entry)),
     );
