@@ -290,6 +290,15 @@ test("unifies only the camera's matching Matter projection, preserving independe
     camera.sensors.find((s) => s.id === "binary_sensor.pigs_hue").cameraNative,
     false,
   );
+  assert.equal(
+    camera.sensors.find((s) => s.id === "binary_sensor.pigs_hue").independent,
+    true,
+  );
+  assert.equal(
+    camera.sensors.find((s) => s.id === "binary_sensor.pigs_matter")
+      .independent,
+    false,
+  );
   assert.ok(!camera.sensors.some((s) => s.id.endsWith("_activity")));
   devices[1].manufacturer = "Another vendor";
   assert.equal(

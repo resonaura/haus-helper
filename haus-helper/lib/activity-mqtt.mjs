@@ -67,7 +67,9 @@ export class ActivityMqtt {
           availability_template: "{{ value_json.availability }}",
           expire_after: 45,
           device: {
-            identifiers: [key],
+            // HA omits extra state attributes while unavailable. Keep the
+            // camera relationship in the persistent device registry too.
+            identifiers: [key, `haus_camera:${camera.id}`],
             name: `${camera.name} Activity`,
             manufacturer: "Haus",
             model: "Unified camera activity",

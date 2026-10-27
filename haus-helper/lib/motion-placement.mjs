@@ -7,7 +7,10 @@ export function analysisLoad(remote, assigned = 0) {
   const reserved =
     Math.max(assigned, detectors.active ?? 0) / Math.max(1, detectors.max);
   const resources = remote.resources ?? {};
-  const cpu = fraction(resources.cpu, 0.5);
+  const cpu = Math.max(
+    fraction(resources.cpu, 0.5),
+    fraction(remote.host?.cpu?.usage),
+  );
   const memory =
     resources.memoryBytes > 0
       ? fraction(resources.memoryUsedBytes / resources.memoryBytes, 0.5)
@@ -38,6 +41,7 @@ export function analysisCandidates(nodes, health, jobs, cooldowns, now) {
         detectors?.supported &&
         remote.relayOrigin &&
         !remote.resources?.pressured &&
+        !remote.resources?.analysisPressured &&
         Number.isFinite(detectors.max) &&
         detectors.max > 0 &&
         (cooldowns.get(node.id) ?? 0) <= now &&

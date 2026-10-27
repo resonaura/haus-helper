@@ -39,6 +39,11 @@ test("one retained discovery per camera; expiring, unretained state and exact so
   assert.equal(published.length, 2);
   assert.equal(published[0].retain, true);
   assert.equal(published[0].payload.device.suggested_area, "Entry");
+  assert.ok(
+    published[0].payload.device.identifiers.includes(
+      "haus_camera:camera.front",
+    ),
+  );
   assert.equal(published[0].payload.expire_after, 45);
   assert.equal(published[1].retain, false);
   assert.equal(published[1].payload.attributes.haus_camera, camera.id);
