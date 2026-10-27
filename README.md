@@ -72,3 +72,6 @@ The camera relationship also lives in the MQTT device registry: Home Assistant d
 
 
 Assist placement also compares measured host CPU and yields to the node’s separate analysis-pressure signal. A fresh decoded frame is not a clear reading until foreground calibration completes; local fallback uses the same readiness rule. The recovery grace allows calibration on slower processors before explicit native fallback.
+
+
+Automatic camera association ignores mixed-camera HA motion groups, preserving existing HA groups and explicit user links. The detector runtime is pinned to NVR 0.3.38, including whole-kernel pressure and foreground-calibration reporting.
