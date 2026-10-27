@@ -1,3 +1,7 @@
+# 0.3.50
+
+- Provision short-lived, encrypted camera-scoped NVR capabilities for native Haus clients through the existing authenticated home connection. Independent camera viewing and warm-source leases can reconnect without HA signaling; node administration keys and camera source credentials stay on the controller/nodes. Respect camera availability, node roles and admission limits; this does not transfer recording ownership.
+
 # 0.3.49
 
 - Skip briefly unreachable NVR nodes across camera owners after a network failure, bound warm-lease validation and release replaced source leases without blocking their replacement. Keep per-camera source errors and busy capacity distinct from node failure; recovered healthy owners remain sticky.
