@@ -809,3 +809,128 @@ test("wrong digest cannot replace an existing recording or ACK the remote origin
     ),
   );
 });
+
+test("late controller recovers a durable NVR original after its temporary session expired, pages past unrelated receipts and never captures it twice", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "haus-durable-capture-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const file = join(root, "clip.mp4");
+  await runMedia("ffmpeg", [
+    "-v",
+    "error",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc2=s=160x90:r=10",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440:sample_rate=16000",
+    "-t",
+    "2",
+    "-c:v",
+    "libx264",
+    "-threads",
+    "1",
+    "-c:a",
+    "aac",
+    "-movflags",
+    "+faststart",
+    file,
+  ]);
+  const data = await readFile(file),
+    sha256 = createHash("sha256").update(data).digest("hex");
+  let at = Date.now(),
+    receipt,
+    acknowledgements = 0,
+    store;
+  const calls = [];
+  const f = await fixture(t, {
+    now: () => at,
+    json: async (_node, path, options = {}) => {
+      calls.push({ path, ...options });
+      if (path === "/v1/camera-recordings")
+        return {
+          items: Array.from({ length: 16 }, () => ({
+            ...receipt,
+            event: { ...receipt.event, id: randomUUID() },
+          })),
+          nextCursor: "16",
+        };
+      if (path === "/v1/camera-recordings?cursor=16")
+        return { items: [receipt], nextCursor: null };
+      if (path === `/v1/camera-recordings/${receipt.event.id}`) {
+        if (options.method === "POST") {
+          assert.equal(
+            store.get(receipt.event.id).status,
+            "ready",
+            "never ACK before durable Helper catalog update",
+          );
+          assert.deepEqual(await readFile(store.path(receipt.event.id)), data);
+          acknowledgements++;
+          return { acknowledged: true };
+        }
+        return receipt;
+      }
+      throw Error("camera_session_not_found");
+    },
+    request: async (_node, path, options) => {
+      calls.push({ path, ...options });
+      assert.equal(path, `/v1/blobs/${sha256}`);
+      return new Response(data, {
+        headers: { "content-length": String(data.length) },
+      });
+    },
+  });
+  store = f.store;
+  f.cluster.health.get("a").remote.features = { cameraRecordingRecovery: 1 };
+  const oldAt = at - 20 * 60000;
+  const event = store.create(camera.id, "motion", oldAt, oldAt + 1000);
+  store.finish(event.id, { status: "interrupted" });
+  receipt = {
+    state: "ready",
+    event: {
+      id: event.id,
+      cameraId: event.cameraId,
+      startAt: event.startAt,
+      endAt: event.endAt,
+      kinds: event.kinds,
+    },
+    bytes: data.length,
+    sha256,
+    duration: 2,
+    mediaStartAt: oldAt - 8000,
+    audio: true,
+  };
+  await f.sessions.recoverRecordings();
+  assert.equal(acknowledgements, 0);
+  at += 10001;
+  await f.sessions.recoverRecordings();
+  assert.equal(store.get(event.id).status, "ready");
+  assert.equal(store.get(event.id).mediaStartAt, oldAt - 8000);
+  assert.equal(store.get(event.id).playbackInfo.audio, true);
+  assert.equal(acknowledgements, 1);
+  assert.equal(store.db.prepare("SELECT count(*) AS n FROM events").get().n, 1);
+  assert.ok(
+    calls.every((call) => !call.path.includes("/cameras/sessions")),
+    "recovery must not attempt to record an old interval again",
+  );
+  at += 10001;
+  await f.sessions.recoverRecordings();
+  at += 10001;
+  await f.sessions.recoverRecordings();
+  assert.equal(acknowledgements, 2, "lost ACK can be repeated idempotently");
+  assert.equal(store.db.prepare("SELECT count(*) AS n FROM events").get().n, 1);
+  const good = receipt.sha256;
+  receipt.sha256 = "a".repeat(64);
+  at += 10001;
+  await f.sessions.recoverRecordings();
+  at += 10001;
+  await f.sessions.recoverRecordings();
+  assert.equal(
+    acknowledgements,
+    2,
+    "a conflicting original is never acknowledged or allowed to replace ready media",
+  );
+  receipt.sha256 = good;
+});

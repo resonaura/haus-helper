@@ -1,3 +1,7 @@
+# 0.3.52
+
+- Send bounded original event metadata to capable NVR captures and recover verified originals after the temporary source session has expired. Page through pending node receipts, retain the original event ID, serialize finalization and acknowledge only after verified media/catalog persistence. Conflicting ready media is never replaced or acknowledged. No physical command, recording mode or Activity Assist setting changes.
+
 # 0.3.51
 
 - Persist each recording camera’s actual NVR assignment and renew bounded autonomous pre-event policies on that node. Reattach to its existing producer after controller restart without consuming a standby source slot. Keep independent source progress through HA registry outages, revoke explicit camera/recording/node disablement, and require acknowledgement before unpairing a continuity-capable node. No detection or recording settings are enabled automatically.
