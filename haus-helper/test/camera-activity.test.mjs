@@ -98,7 +98,7 @@ test("unavailable analysis falls back explicitly to native motion, never a false
   activity.native(camera.id, "motion", camera.sensors[0].id);
   assert.equal(captures.length, 0);
   assert.equal(activity.status(camera.id).source, "analysis_unavailable");
-  advance(12001);
+  advance(30001);
   activity.native(camera.id, "motion", camera.sensors[0].id);
   assert.equal(captures.length, 1);
   assert.equal(activity.status(camera.id).source, "native_fallback");

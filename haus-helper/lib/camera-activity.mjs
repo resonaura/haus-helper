@@ -41,7 +41,7 @@ export class CameraActivity {
     if (assist && !healthy) entry.waitingAt ??= this.now();
     else entry.waitingAt = undefined;
     const validating =
-      assist && (healthy || this.now() - entry.waitingAt < 12000);
+      assist && (healthy || this.now() - entry.waitingAt < 30000);
     // Generic native motion becomes a hint while analysis validates the scene.
     // Recognized native objects/doorbell keep their existing semantics.
     const accepted = native.filter(

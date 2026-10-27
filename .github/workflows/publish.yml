@@ -23,6 +23,12 @@ jobs:
       - name: Install media test dependencies
         timeout-minutes: 15
         run: |
+          # The runner's Azure mirror can make steady progress so slowly that
+          # the installation exceeds the whole step deadline. Keep Ubuntu's
+          # signed packages, using its official HTTPS archive instead.
+          if test -f /etc/apt/apt-mirrors.txt; then
+            sudo sed -i -E 's|https?://azure.archive.ubuntu.com/ubuntu|https://archive.ubuntu.com/ubuntu|g' /etc/apt/apt-mirrors.txt
+          fi
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
           sudo apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends ffmpeg
       - run: npm ci --ignore-scripts

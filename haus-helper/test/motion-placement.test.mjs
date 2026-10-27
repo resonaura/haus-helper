@@ -55,6 +55,23 @@ test("selects the least loaded eligible analysis node using CPU, memory and rese
   health.get("idle").remote.detectors.active = 2;
   assert.deepEqual(rank(), ["busy"]);
 });
+test("whole-host CPU and PSI pressure count even with idle container quota", () => {
+  const { health, rank } = fixture();
+  health.get("idle").remote.host = { cpu: { usage: 0.99 } };
+  assert.deepEqual(rank(), ["busy", "idle"]);
+  health.get("idle").remote.resources.analysisPressured = true;
+  assert.deepEqual(rank(), ["busy"]);
+});
+test("fresh decoded frames are not a clear reading before model calibration", () => {
+  const { motion } = fixture();
+  const now = Date.now();
+  motion.now = () => now;
+  const worker = { state: "running", lastResult: now, calibrated: false };
+  motion.jobs.set("camera.test", { local: true, worker });
+  assert.equal(motion.status("camera.test").fresh, false);
+  worker.calibrated = true;
+  assert.equal(motion.status("camera.test").fresh, true);
+});
 
 test("ignores disabled, storage-only, offline, pressured, unsupported and cooling-down nodes", () => {
   const { nodes, health, motion, rank } = fixture();

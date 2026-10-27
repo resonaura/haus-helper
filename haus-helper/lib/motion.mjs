@@ -58,6 +58,11 @@ export class Motion {
       /* Older/development installations simply have no local inference worker. */
     }
   }
+  get localPressured() {
+    return Boolean(
+      this.capacity?.pressured || this.capacity?.analysisPressured,
+    );
+  }
   sync(cameras) {
     this.epoch = (this.epoch ?? 0) + 1;
     this.cameras = cameras;
@@ -81,11 +86,14 @@ export class Motion {
       home &&
       (!this.localSupported ||
         !this.capacity?.detectors ||
-        this.capacity.pressured ||
+        this.localPressured ||
         (!job && [...this.jobs.values()].some((entry) => entry.local)));
     return {
       fresh: Boolean(
         job &&
+        (job.local
+          ? job.worker.calibrated !== false
+          : job.calibrated !== false) &&
         Number.isFinite(job.local ? job.worker.lastResult : job.lastResultAt) &&
         this.now() - (job.local ? job.worker.lastResult : job.lastResultAt) >=
           -5000 &&
@@ -251,7 +259,7 @@ export class Motion {
       [...this.jobs.values()].some((job) => job.local)
     )
       return;
-    if (this.stopped || !this.capacity?.detectors || this.capacity.pressured)
+    if (this.stopped || !this.capacity?.detectors || this.localPressured)
       return;
     const job = { local: true, mode };
     const worker = new this.worker({
@@ -304,7 +312,7 @@ export class Motion {
       !this.localSupported ||
       [...this.jobs.values()].some((job) => job.local) ||
       !this.capacity?.detectors ||
-      this.capacity.pressured ||
+      this.localPressured ||
       this.stopped ||
       this.epoch !== epoch
     )
@@ -346,7 +354,7 @@ export class Motion {
               await this.release(id);
               return;
             }
-            job.overloadedAt = this.capacity?.pressured
+            job.overloadedAt = this.localPressured
               ? (job.overloadedAt ?? this.now())
               : undefined;
             if (
@@ -364,8 +372,10 @@ export class Motion {
               !this.cluster.health.get(job.node.id)?.online
             )
               throw new Error("detector_node_unavailable");
-            const pressured = this.cluster.health.get(job.node.id)?.remote
-              ?.resources?.pressured;
+            const resources = this.cluster.health.get(job.node.id)?.remote
+              ?.resources;
+            const pressured =
+              resources?.pressured || resources?.analysisPressured;
             job.overloadedAt = pressured
               ? (job.overloadedAt ?? this.now())
               : undefined;
@@ -390,6 +400,7 @@ export class Motion {
               throw new Error("detector_failed");
             job.state = status.state;
             job.lastResultAt = status.lastResultAt;
+            job.calibrated = status.calibrated;
             for (const event of (status.events ?? []).slice(-64)) {
               if (
                 Number.isSafeInteger(event.sequence) &&
