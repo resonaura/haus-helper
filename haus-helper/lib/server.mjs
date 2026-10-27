@@ -1,4 +1,5 @@
 import { Servers } from "./servers.mjs";
+import { liveChannel } from "./live-channel.mjs";
 import { rewritePlaylist } from "./warm-streams.mjs";
 import { motionSettings } from "./motion-settings.mjs";
 import { createTalkback, customTalkback } from "./talkback.mjs";
@@ -722,6 +723,23 @@ export function createApi({
         error: client ? message : "service_temporarily_unavailable",
       });
     }
+  });
+  const live = liveChannel(server, {
+    authorize: (req) =>
+      config.standalone
+        ? safeEqual(req.headers.authorization, `Bearer ${config.apiToken}`)
+        : req.socket.remoteAddress?.replace(/^::ffff:/, "") === "172.30.32.2",
+    shared,
+    ha,
+  });
+  server.on("request", (req, res) => {
+    if (
+      req.method === "PATCH" &&
+      /^\/api\/cameras\/camera\.[a-z0-9_]+$/.test(req.url ?? "")
+    )
+      res.once("finish", () => {
+        if (res.statusCode < 300) live.publish("cameras");
+      });
   });
   server.requestTimeout = 65000;
   server.headersTimeout = 10000;
