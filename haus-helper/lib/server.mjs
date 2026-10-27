@@ -731,6 +731,7 @@ export function createApi({
         : req.socket.remoteAddress?.replace(/^::ffff:/, "") === "172.30.32.2",
     shared,
     ha,
+    sources: () => cameraSessions?.sourceHealth?.() ?? [],
   });
   server.on("request", (req, res) => {
     if (

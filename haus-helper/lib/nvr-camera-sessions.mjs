@@ -115,6 +115,7 @@ export class NvrCameraSessions {
     this.pending = new Map();
     this.cameraPending = new Map();
     this.nodeReservations = new Map();
+    this.failedNodes = new Map();
     this.viewers = new Map();
     this.closedViewers = new Map();
     this.events = new Map();
@@ -154,6 +155,22 @@ export class NvrCameraSessions {
         (this.nodeReservations.get(node.id) ?? 0),
     };
   }
+  sourceHealth() {
+    return (this.cameras ?? []).slice(0, 256).map((camera) => {
+      const buffer = this.buffers.get(camera.id);
+      const expiresAt =
+        buffer?.status === "buffering" &&
+        !buffer.stopped &&
+        Number.isFinite(buffer.lastAdvance)
+          ? buffer.lastAdvance + 15000
+          : 0;
+      return {
+        id: camera.id,
+        available: Boolean(camera.available && expiresAt > this.now()),
+        expiresAt,
+      };
+    });
+  }
   candidates() {
     return this.cluster
       .nodes()
@@ -162,6 +179,7 @@ export class NvrCameraSessions {
         const { remote, capability, active } = this.nodeLoad(node);
         return (
           node.enabled &&
+          (this.failedNodes.get(node.id)?.until ?? 0) <= this.now() &&
           node.roles.includes("stream") &&
           health?.online &&
           capability?.profile === 1 &&
@@ -189,6 +207,7 @@ export class NvrCameraSessions {
   }
   validNode(node) {
     return (
+      (this.failedNodes.get(node.id)?.until ?? 0) <= this.now() &&
       this.cluster
         .nodes()
         .some(
@@ -196,8 +215,29 @@ export class NvrCameraSessions {
             current.id === node.id &&
             current.enabled &&
             current.roles.includes("stream"),
-        ) && this.cluster.health.get(node.id)?.online
+        ) &&
+      this.cluster.health.get(node.id)?.online
     );
+  }
+  nodeFailure(node, error) {
+    if (this.stopped || this.abort.signal.aborted) return;
+    // Source rejection/capacity is not evidence that every camera on a node failed.
+    if (
+      !["TypeError", "AbortError", "TimeoutError"].includes(error?.name) &&
+      ![502, 504].includes(error?.status) &&
+      error?.code !== "node_unavailable"
+    )
+      return;
+    const failures = Math.min(
+      4,
+      (this.failedNodes.get(node.id)?.failures ?? 0) + 1,
+    );
+    this.failedNodes.set(node.id, {
+      failures,
+      until: this.now() + Math.min(30000, 3000 * 2 ** (failures - 1)),
+    });
+    if (this.failedNodes.size > 64)
+      this.failedNodes.delete(this.failedNodes.keys().next().value);
   }
   async advertiseHost(node) {
     const host = new URL(node.url).hostname.replace(/^\[|\]$/g, "");
@@ -317,10 +357,11 @@ export class NvrCameraSessions {
             method: "POST",
             data: { owner },
             signal: this.abort.signal,
-            timeout: 10000,
+            timeout: 3500,
           },
         );
         this.validateSession(value);
+        this.failedNodes.delete(old.node.id);
         const entry = {
           ...old,
           id: value.id,
@@ -335,8 +376,12 @@ export class NvrCameraSessions {
         }
         this.entries.set(key, entry);
         this.updateBuffer(entry);
+        if (old && (old.node.id !== entry.node.id || old.id !== entry.id))
+          void this.releaseEntry(old);
         return entry;
-      } catch {}
+      } catch (error) {
+        this.nodeFailure(old.node, error);
+      }
     }
     const choices = preferredNode
       ? this.candidates().filter((node) => node.id === preferredNode.id)
@@ -381,6 +426,7 @@ export class NvrCameraSessions {
           timeout: 15000,
         });
         this.validateSession(value);
+        this.failedNodes.delete(node.id);
         const entry = {
           node,
           id: value.id,
@@ -398,8 +444,11 @@ export class NvrCameraSessions {
         }
         this.entries.set(key, entry);
         this.updateBuffer(entry);
+        if (old && (old.node.id !== entry.node.id || old.id !== entry.id))
+          void this.releaseEntry(old);
         return entry;
       } catch (error) {
+        this.nodeFailure(node, error);
         if (this.stopped || (this.revisions.get(key) ?? 0) !== revision)
           throw error;
       } finally {

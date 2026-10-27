@@ -4,7 +4,7 @@ import { WebSocketServer, WebSocket } from "ws";
 /** Ingress-authenticated invalidations, independent of the HA event socket. No commands or credentials. */
 export function liveChannel(
   server,
-  { authorize, shared, ha, heartbeatMs = 20000 },
+  { authorize, shared, ha, sources, heartbeatMs = 5000 },
 ) {
   const hub = new WebSocketServer({
     noServer: true,
@@ -20,6 +20,7 @@ export function liveChannel(
     topic,
     revision: shared?.get().revision ?? "0",
     connected: Boolean(ha.connected),
+    ...(sources ? { sources: sources() } : {}),
   });
   const send = (socket, value) => {
     if (socket.readyState !== WebSocket.OPEN) return;
