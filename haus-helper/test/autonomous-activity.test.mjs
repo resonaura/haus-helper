@@ -82,6 +82,8 @@ test("explicit activity authority restores a full assigned worker, fences new-ev
       cluster.health.get(node.id).remote.cameraActivity = {
         cameras: options.data.cameras.map((plan) => ({
           ...plan,
+          admitted: true,
+          ready: true,
           state: "running",
           calibrated: true,
           lastResultAt: at,

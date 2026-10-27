@@ -16,6 +16,7 @@ export class AutonomousActivity {
     this.sent = new Map();
     this.pending = new Map();
     this.revokingNodes = new Set();
+    this.observed = new Map();
     store.db.exec(`CREATE TABLE IF NOT EXISTS nvr_activity_policies(
       policy_id TEXT PRIMARY KEY,camera_id TEXT NOT NULL,node_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,revoked_at INTEGER);
@@ -92,7 +93,7 @@ export class AutonomousActivity {
         .prepare(
           "INSERT INTO nvr_activity_policies(policy_id,camera_id,node_id,created_at,expires_at)VALUES(?,?,?,?,?)",
         )
-        .run(id, camera.id, node.id, this.now(), this.now() + 86400000);
+        .run(id, camera.id, node.id, this.now(), this.now() + 86340000);
       policy = this.active(camera.id);
       this.cluster.backups?.markChanged?.();
       this.sent.delete(node.id);
@@ -106,6 +107,8 @@ export class AutonomousActivity {
         plan.cameraId === camera.id && plan.policyId === policy.policy_id,
     );
     if (!current) throw Error("activity_assignment_unavailable");
+    this.observed.set(camera.id, current);
+    if (current.admitted === false) throw Error("activity_source_capacity");
     return current;
   }
   syncNode(node, force = false) {
@@ -123,7 +126,7 @@ export class AutonomousActivity {
     if (this.stopped || !this.capable(node)) return;
     const registry = this.sessions.registry(),
       plans = [],
-      expiresAt = this.now() + 86400000;
+      expiresAt = this.now() + 86340000;
     for (const policy of this.store.db
       .prepare(
         "SELECT * FROM nvr_activity_policies WHERE node_id=? AND revoked_at IS NULL",
@@ -262,6 +265,18 @@ export class AutonomousActivity {
     const policy = this.active(id),
       camera = this.sessions.camera(id);
     if (!policy || policy.expires_at <= this.now() || !this.enabled(camera))
+      return false;
+    const remote = this.cluster.health
+      .get(policy.node_id)
+      ?.remote?.cameraActivity?.cameras?.find(
+        (plan) => plan.cameraId === id && plan.policyId === policy.policy_id,
+      );
+    const observed = this.observed.get(id) ?? remote;
+    if (
+      observed?.policyId !== policy.policy_id ||
+      observed.admitted !== true ||
+      observed.ready !== true
+    )
       return false;
     if (
       !Number.isSafeInteger(at) ||
