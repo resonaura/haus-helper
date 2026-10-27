@@ -10,6 +10,54 @@ const state = (id, name, cls) => ({
   state: "off",
   attributes: { friendly_name: name, device_class: cls },
 });
+test("a group spanning two cameras is not automatically attached to one by room name", () => {
+  const states = [
+    { ...state("camera.outdoor", "Outdoor Camera"), state: "streaming" },
+    { ...state("camera.side", "Outdoor Side Camera"), state: "streaming" },
+    state(
+      "binary_sensor.front_motion",
+      "Outdoor Camera Motion Sensor",
+      "motion",
+    ),
+    state("binary_sensor.side_motion", "Side motion", "motion"),
+    {
+      ...state("binary_sensor.outdoor_motion", "Outdoor motion", "motion"),
+      attributes: {
+        friendly_name: "Outdoor motion",
+        device_class: "motion",
+        entity_id: ["binary_sensor.front_motion", "binary_sensor.side_motion"],
+      },
+    },
+  ];
+  const entities = [
+    { entity_id: "camera.outdoor", device_id: "front" },
+    { entity_id: "camera.side", device_id: "side" },
+    { entity_id: "binary_sensor.front_motion", device_id: "front" },
+    { entity_id: "binary_sensor.side_motion", device_id: "side" },
+    { entity_id: "binary_sensor.outdoor_motion", platform: "group" },
+  ];
+  const cameras = discoverCameras(states, entities, [
+    { id: "front" },
+    { id: "side" },
+  ]);
+  assert.ok(
+    cameras.every(
+      (c) => !c.sensors.some((s) => s.id === "binary_sensor.outdoor_motion"),
+    ),
+  );
+  assert.ok(cameras.every((c) => c.sensors.length === 1));
+  const manual = discoverCameras(
+    states,
+    entities,
+    [{ id: "front" }, { id: "side" }],
+    { "camera.outdoor": { sensorIds: ["binary_sensor.outdoor_motion"] } },
+  );
+  assert.ok(
+    manual
+      .find((c) => c.id === "camera.outdoor")
+      .sensors.some((s) => s.id === "binary_sensor.outdoor_motion"),
+  );
+});
 test("binds detectors to their own camera device, never a neighboring device", () => {
   const states = [
     state("camera.entry", "Entry"),

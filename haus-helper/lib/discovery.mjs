@@ -177,6 +177,20 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
     const kind = detectionKind(state);
     if (!kind) continue;
     const sensor = registry.get(state.entity_id) ?? {};
+    if (
+      sensor.platform === "group" &&
+      Array.isArray(state.attributes.entity_id)
+    ) {
+      const owners = new Set();
+      for (const member of state.attributes.entity_id.slice(0, 64)) {
+        const memberDevice = deviceMap.get(registry.get(member)?.device_id);
+        for (const camera of cameras)
+          if (cameraNative(camera, memberDevice)) owners.add(camera.id);
+      }
+      // A mixed-camera room group is not this camera's physical detector.
+      // Explicit manual links below remain the user's choice.
+      if (owners.size > 1) continue;
+    }
     const device = deviceMap.get(sensor.device_id);
     const areaId = sensor.area_id ?? device?.area_id;
     const own = cameras.filter(

@@ -1,4 +1,4 @@
-FROM ghcr.io/resonaura/haus-nvr:0.3.37 AS vision
+FROM ghcr.io/resonaura/haus-nvr:0.3.38 AS vision
 FROM node:24-bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates tini python3 \
     && rm -rf /var/lib/apt/lists/*
