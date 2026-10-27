@@ -163,6 +163,17 @@ async function fixture(t, overrides = {}) {
     sessions,
   };
 }
+test("recording reuses the authorized activity producer even when its node has no spare source slot", async (t) => {
+  const f = await fixture(t);
+  f.cluster.health.get("a").remote.rtspSessions.active = 1;
+  f.cluster.health.get("a").remote.rtspSessions.max = 1;
+  f.sessions.activityAssignedNode = () => f.nodes[0];
+  await f.sessions.ensure(f.registry.cameras[0], f.sessions.recordingOwner);
+  assert.equal(
+    f.calls.find((call) => call.path === "/v1/cameras/sessions").node,
+    "a",
+  );
+});
 test("simultaneous owners open one shared producer without racing onto separate nodes", async (t) => {
   const firstStarted = Promise.withResolvers();
   const releaseFirst = Promise.withResolvers();
@@ -933,4 +944,92 @@ test("late controller recovers a durable NVR original after its temporary sessio
     "a conflicting original is never acknowledged or allowed to replace ready media",
   );
   receipt.sha256 = good;
+});
+
+test("new autonomous event is adopted only through recorded policy authority and retains its node ID through verified media recovery", async (t) => {
+  const sourceRoot = await mkdtemp(join(tmpdir(), "haus-new-activity-"));
+  t.after(() => rm(sourceRoot, { recursive: true, force: true }));
+  const source = join(sourceRoot, "clip.mp4");
+  await runMedia("ffmpeg", [
+    "-v",
+    "error",
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "testsrc2=s=160x90:r=10",
+    "-f",
+    "lavfi",
+    "-i",
+    "sine=frequency=440:sample_rate=16000",
+    "-t",
+    "2",
+    "-c:v",
+    "libx264",
+    "-threads",
+    "1",
+    "-c:a",
+    "aac",
+    "-movflags",
+    "+faststart",
+    source,
+  ]);
+  const data = await readFile(source),
+    sha256 = createHash("sha256").update(data).digest("hex");
+  let at = Date.now();
+  const event = {
+    id: randomUUID(),
+    cameraId: camera.id,
+    startAt: at - 20000,
+    endAt: at - 19000,
+    kinds: ["person"],
+    origin: { kind: "camera-activity", policyId: randomUUID() },
+  };
+  const receipt = {
+    state: "ready",
+    event,
+    bytes: data.length,
+    sha256,
+    duration: 2,
+    mediaStartAt: event.startAt - 8000,
+    audio: true,
+  };
+  let acks = 0;
+  const f = await fixture(t, {
+    now: () => at,
+    json: async (_node, path, options = {}) => {
+      if (path === "/v1/camera-recordings") return { items: [receipt] };
+      if (path === `/v1/camera-recordings/${event.id}`) {
+        if (options.method === "POST") {
+          acks++;
+          return { acknowledged: true };
+        }
+        return receipt;
+      }
+      throw Error("temporary_session_expired");
+    },
+    request: async () =>
+      new Response(data, {
+        headers: { "content-length": String(data.length) },
+      }),
+  });
+  f.cluster.health.get("a").remote.features = { cameraRecordingRecovery: 1 };
+  await f.sessions.recoverRecordings();
+  assert.equal(f.store.get(event.id), undefined);
+  assert.equal(acks, 0);
+  f.sessions.authorizeActivityRecording = (node, value) =>
+    node.id === "a" && value.event.origin.policyId === event.origin.policyId;
+  at += 10001;
+  await f.sessions.recoverRecordings();
+  assert.equal(f.store.get(event.id).status, "ready");
+  assert.equal(f.store.get(event.id).cameraId, camera.id);
+  assert.equal(f.store.get(event.id).mediaStartAt, event.startAt - 8000);
+  assert.deepEqual(await readFile(f.store.path(event.id)), data);
+  assert.equal(acks, 1);
+  at += 10001;
+  await f.sessions.recoverRecordings();
+  assert.equal(
+    f.store.db.prepare("SELECT count(*) AS n FROM events").get().n,
+    1,
+  );
 });

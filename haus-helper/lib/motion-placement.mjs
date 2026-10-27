@@ -39,7 +39,8 @@ export function analysisCandidates(nodes, health, jobs, cooldowns, now) {
         node.roles.includes("stream") &&
         status?.online &&
         detectors?.supported &&
-        remote.relayOrigin &&
+        (remote.relayOrigin ||
+          remote.features?.autonomousCameraActivity === 1) &&
         !remote.resources?.pressured &&
         !remote.resources?.analysisPressured &&
         Number.isFinite(detectors.max) &&

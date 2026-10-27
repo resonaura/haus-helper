@@ -5,6 +5,7 @@ import { nodeJson, nodeRequest } from "./node-client.mjs";
 import { once } from "node:events";
 import { analysisCandidates } from "./motion-placement.mjs";
 import { MAX_ASSIST_DELAY_MS } from "./motion-settings.mjs";
+import { AutonomousActivity } from "./autonomous-activity.mjs";
 
 async function eachWorker(items, visit) {
   let next = 0;
@@ -46,6 +47,14 @@ export class Motion {
     this.cameras = [];
     this.localSupported = false;
     this.abort = new AbortController();
+    if (recorder.store?.db && warm?.sessions)
+      this.autonomous = new AutonomousActivity({
+        store: recorder.store,
+        config,
+        cluster,
+        sessions: warm.sessions,
+        now,
+      });
   }
   async initialize() {
     try {
@@ -69,7 +78,12 @@ export class Motion {
     for (const [id, job] of this.jobs) {
       const camera = cameras.find((camera) => camera.id === id);
       if (
-        !camera?.available ||
+        (!camera?.available &&
+          !(
+            camera &&
+            this.autonomous?.active(camera.id) &&
+            this.autonomous.enabled(camera)
+          )) ||
         !camera.enabled ||
         !camera.motionDetection?.enabled ||
         camera.motionDetection.mode !== job.mode
@@ -151,6 +165,10 @@ export class Motion {
     const job = this.jobs.get(id);
     if (!job) return;
     this.jobs.delete(id);
+    if (job.autonomous) {
+      if (!this.stopped) await this.autonomous.revoke(id);
+      return;
+    }
     if (job.lease) this.warm.leases.delete(job.lease);
     if (job.sessionOwner)
       await this.warm.sessions.release(id, job.sessionOwner);
@@ -275,8 +293,33 @@ export class Motion {
   }
   async startNvr(camera, epoch, mode) {
     const owner = `assist-${randomUUID()}`;
-    for (const node of this.candidates().slice(0, 3)) {
+    const prior = this.autonomous?.priorNode(camera);
+    const choices = this.candidates();
+    if (prior) {
+      const index = choices.findIndex((node) => node.id === prior.id);
+      if (index >= 0) choices.splice(index, 1);
+      choices.unshift(prior);
+    }
+    for (const node of choices.slice(0, 3)) {
       try {
+        if (
+          this.autonomous &&
+          this.cluster.health.get(node.id)?.remote?.features
+            ?.autonomousCameraActivity === 1
+        ) {
+          const status = await this.autonomous.ensure(camera, node);
+          this.jobs.set(camera.id, {
+            autonomous: true,
+            node,
+            policyId: status.policyId,
+            mode,
+            state: status.state,
+            sequence: 0,
+          });
+          if (this.stopped || this.epoch !== epoch)
+            await this.release(camera.id);
+          return;
+        }
         const entry = await this.warm.sessions.ensure(
           camera,
           owner,
@@ -327,7 +370,14 @@ export class Motion {
     });
     this.jobs.set(camera.id, job);
   }
-  async tick() {
+  tick() {
+    if (this.running) return this.running;
+    this.running = this.workTick().finally(() => {
+      this.running = undefined;
+    });
+    return this.running;
+  }
+  async workTick() {
     if (this.busy || this.stopped) return;
     this.busy = true;
     try {
@@ -335,7 +385,9 @@ export class Motion {
         (camera) =>
           camera.motionDetection?.enabled &&
           camera.enabled &&
-          camera.available &&
+          (camera.available ||
+            (this.autonomous?.active(camera.id) &&
+              this.autonomous.enabled(camera))) &&
           this.config.recording_enabled,
       );
       await eachWorker([...this.jobs], async ([id, job]) => {
@@ -381,6 +433,29 @@ export class Motion {
               : undefined;
             if (job.overloadedAt && this.now() - job.overloadedAt > 20000)
               throw new Error("detector_overloaded");
+            if (job.autonomous) {
+              const status = await this.autonomous.ensure(camera, job.node);
+              job.state = status.state;
+              job.lastResultAt = status.lastResultAt;
+              job.calibrated = status.calibrated;
+              if (job.generation !== status.generation) {
+                job.generation = status.generation;
+                job.sequence = 0;
+              }
+              for (const event of (status.events ?? []).slice(-64))
+                if (
+                  Number.isSafeInteger(event.sequence) &&
+                  event.sequence > job.sequence
+                ) {
+                  job.sequence = event.sequence;
+                  this.deliver(
+                    camera,
+                    { ...event, recordingManaged: true },
+                    job,
+                  );
+                }
+              return;
+            }
             if (job.entry) job.entry.expires = this.now() + 45000;
             if (job.sessionOwner) {
               const entry = await this.warm.sessions.ensure(
@@ -416,6 +491,7 @@ export class Motion {
           await this.release(id);
         }
       });
+      await this.autonomous?.sync();
       for (const camera of enabled
         .filter(
           (camera) =>
@@ -440,6 +516,8 @@ export class Motion {
   async stop() {
     this.stopped = true;
     this.abort.abort();
+    await this.running?.catch(() => {});
+    await this.autonomous?.stop();
     this.capacity?.stop();
     await Promise.allSettled(
       [...this.jobs.keys()].map((id) => this.release(id)),

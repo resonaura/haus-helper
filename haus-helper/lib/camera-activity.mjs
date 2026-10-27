@@ -71,7 +71,7 @@ export class CameraActivity {
       kind: entry.kind,
     };
   }
-  accept(id, kind, source, at = this.now()) {
+  accept(id, kind, source, at = this.now(), recordingManaged = false) {
     const entry = this.entries.get(id);
     if (
       !entry ||
@@ -85,6 +85,7 @@ export class CameraActivity {
     entry.kind = kind;
     if (this.now() - (entry.delivered.get(kind) ?? -Infinity) < 3000) return;
     entry.delivered.set(kind, this.now());
+    if (recordingManaged || this.captureNative?.(id, kind, source, at)) return;
     try {
       this.recorder.trigger(id, kind, source, at);
     } catch {
@@ -127,7 +128,13 @@ export class CameraActivity {
   }
   software(id, event) {
     if (!["motion", "person", "pet", "vehicle"].includes(event.kind)) return;
-    this.accept(id, event.kind, "haus_activity_assist", event.at);
+    this.accept(
+      id,
+      event.kind,
+      "haus_activity_assist",
+      event.at,
+      event.recordingManaged === true,
+    );
   }
   activeSensors(camera) {
     const state = this.status(camera.id);

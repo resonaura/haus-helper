@@ -123,3 +123,24 @@ test("software-only sensors expire; stream-only state works; old events cannot w
     }),
   );
 });
+
+test("managed software and native semantic detections update canonical state without a second controller recording", () => {
+  const { activity, captures, camera } = fixture();
+  let native = 0;
+  activity.captureNative = (id, kind) => {
+    assert.equal(id, camera.id);
+    assert.equal(kind, "person");
+    native++;
+    return true;
+  };
+  activity.software(camera.id, {
+    kind: "pet",
+    at: 100000,
+    recordingManaged: true,
+  });
+  assert.equal(activity.status(camera.id).active, true);
+  assert.equal(captures.length, 0);
+  activity.native(camera.id, "person", "native-person", 100000);
+  assert.equal(native, 1);
+  assert.equal(captures.length, 0);
+});

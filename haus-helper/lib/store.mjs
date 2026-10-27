@@ -155,6 +155,30 @@ export class Store {
       );
     return this.get(id);
   }
+  adoptActivity(event) {
+    this.db
+      .prepare(
+        "INSERT OR IGNORE INTO events(id,camera_id,start_at,end_at,status,kinds,detections,local_original,local_playback)VALUES(?,?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        event.id,
+        event.cameraId,
+        event.startAt,
+        event.endAt,
+        "recording",
+        JSON.stringify(event.kinds),
+        JSON.stringify([
+          {
+            kind: event.kinds[0],
+            at: event.startAt,
+            sensorId: "haus_activity_assist",
+          },
+        ]),
+        0,
+        0,
+      );
+    return this.get(event.id);
+  }
   extend(id, kind, at, endAt, sensorId, maxEndAt = Infinity) {
     const old = this.get(id);
     if (!old || old.status !== "recording") return;

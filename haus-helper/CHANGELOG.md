@@ -1,3 +1,7 @@
+# 0.3.53
+
+- Assign opted-in Activity Assist to durable NVR policies and reattach to its existing worker after controller restart, even when the node has no spare source slot. Retain policy authority history for verified new-event adoption under the original NVR ID. Delegate accepted native semantic/PIR recording to that same policy, suppress duplicate controller capture, and retry only the same bounded recording intent. Preserve native fallback during inference pressure and existing local/older-node behavior. Never enable Assist or change camera recording settings automatically.
+
 # 0.3.52
 
 - Send bounded original event metadata to capable NVR captures and recover verified originals after the temporary source session has expired. Page through pending node receipts, retain the original event ID, serialize finalization and acknowledge only after verified media/catalog persistence. Conflicting ready media is never replaced or acknowledged. No physical command, recording mode or Activity Assist setting changes.
