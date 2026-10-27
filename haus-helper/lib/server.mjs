@@ -1,5 +1,6 @@
 import { Servers } from "./servers.mjs";
 import { liveChannel } from "./live-channel.mjs";
+import { CameraAccessBootstrap } from "./camera-access.mjs";
 import { rewritePlaylist } from "./warm-streams.mjs";
 import { motionSettings } from "./motion-settings.mjs";
 import { createTalkback, customTalkback } from "./talkback.mjs";
@@ -74,6 +75,10 @@ export function createApi({
 }) {
   const talkback = createTalkback({ config });
   const preparation = new PlaybackPreparation(recorder);
+  const cameraAccess =
+    cameraSessions && cluster
+      ? new CameraAccessBootstrap({ sessions: cameraSessions, cluster, config })
+      : undefined;
   const server = createServer(async (req, res) => {
     try {
       const url = new URL(req.url, "http://haus.invalid");
@@ -122,6 +127,18 @@ export function createApi({
         : address === "172.30.32.2";
       if (!authorized)
         return json(res, 401, { error: "authentication_required" });
+      if (
+        path === "/api/camera-access" &&
+        req.method === "POST" &&
+        cameraAccess
+      ) {
+        const input = await requestBody(req);
+        return json(
+          res,
+          200,
+          await cameraAccess.bootstrap(input.cameraId, input.clientId),
+        );
+      }
       if (
         !config.standalone &&
         req.method !== "GET" &&
@@ -466,6 +483,7 @@ export function createApi({
           store.setCamera(id, next);
           backups?.markChanged();
           await refresh();
+          await cameraAccess?.reconcile();
           return json(res, 200, {
             camera: publicCamera(
               getRegistry().cameras.find((item) => item.id === id),
@@ -746,6 +764,9 @@ export function createApi({
   server.headersTimeout = 10000;
   server.on("close", talkback.stopAll);
   server.on("close", () => preparation.clear());
+  const accessPolicy =
+    cameraAccess && setInterval(() => void cameraAccess.reconcile(), 15000);
+  server.on("close", () => clearInterval(accessPolicy));
   server.on("close", () => {
     servers?.telemetry?.stop();
     void servers?.storageUsage?.stop();
