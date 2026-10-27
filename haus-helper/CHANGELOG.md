@@ -1,3 +1,7 @@
+# 0.3.51
+
+- Persist each recording camera’s actual NVR assignment and renew bounded autonomous pre-event policies on that node. Reattach to its existing producer after controller restart without consuming a standby source slot. Keep independent source progress through HA registry outages, revoke explicit camera/recording/node disablement, and require acknowledgement before unpairing a continuity-capable node. No detection or recording settings are enabled automatically.
+
 # 0.3.50
 
 - Provision short-lived, encrypted camera-scoped NVR capabilities for native Haus clients through the existing authenticated home connection. Independent camera viewing and warm-source leases can reconnect without HA signaling; node administration keys and camera source credentials stay on the controller/nodes. Respect camera availability, node roles and admission limits; this does not transfer recording ownership.

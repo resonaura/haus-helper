@@ -31,6 +31,55 @@ const session = {
   audio: true,
   capabilities: { webrtc: true, recording: true },
 };
+test("durable prebuffer follows its actual assigned node, retains outage context and revokes explicit Off without assigning standbys", async (t) => {
+  const f = await fixture(t);
+  for (const node of f.nodes)
+    f.cluster.health.get(node.id).remote.features = { cameraContinuity: 1 };
+  await f.sessions.ensure(f.registry.cameras[0], f.sessions.recordingOwner);
+  f.registry.states.push({ entity_id: camera.id, state: "idle" });
+  await f.sessions.syncContinuity(true);
+  const policies = f.calls.filter(
+    (call) => call.path === "/v1/camera-continuity",
+  );
+  assert.equal(policies.length, 2);
+  const assigned = policies.find((call) => call.data.cameras.length);
+  assert.ok(assigned);
+  assert.equal(policies.filter((call) => call.data.cameras.length).length, 1);
+  assert.equal(assigned.data.cameras[0].source.kind, "p2p-restream");
+  const assignedNode = f.nodes.find((node) => node.id === assigned.node);
+  assignedNode.enabled = false;
+  await f.sessions.syncContinuity(true);
+  assert.equal(
+    f.calls
+      .filter(
+        (call) =>
+          call.path === "/v1/camera-continuity" && call.node === assigned.node,
+      )
+      .at(-1).data.cameras.length,
+    0,
+  );
+  assignedNode.enabled = true;
+  f.registry.cameras[0].available = false;
+  await f.sessions.syncContinuity(true);
+  assert.equal(
+    f.calls
+      .filter(
+        (call) =>
+          call.path === "/v1/camera-continuity" && call.node === assigned.node,
+      )
+      .at(-1).data.cameras.length,
+    1,
+  );
+  f.registry.states.find((state) => state.entity_id === camera.id).state =
+    "off";
+  await f.sessions.syncContinuity(true);
+  assert.ok(
+    f.calls
+      .filter((call) => call.path === "/v1/camera-continuity")
+      .slice(-2)
+      .every((call) => call.data.cameras.length === 0),
+  );
+});
 async function fixture(t, overrides = {}) {
   const root = await mkdtemp(join(tmpdir(), "haus-camera-nvr-")),
     media = join(root, "media");
