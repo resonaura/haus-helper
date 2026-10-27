@@ -50,6 +50,13 @@ const warm = new WarmStreams(ha, recorder, cluster, {
 });
 const motion = new Motion({ ha, recorder, cluster, warm, config });
 const activity = new CameraActivity({ recorder, motion });
+cameraSessions.authorizeActivityRecording = (node, value) =>
+  motion.autonomous?.authorizes(node, value) === true;
+cameraSessions.activityAssignedNode = (camera) =>
+  motion.autonomous?.priorNode(camera);
+cameraSessions.clearActivityNode = (id) => motion.autonomous?.clearNode(id);
+activity.captureNative = (id, kind, source, at) =>
+  motion.autonomous?.triggerNative(id, kind, source, at) === true;
 const activityMqtt = new ActivityMqtt({
   ha,
   activity,

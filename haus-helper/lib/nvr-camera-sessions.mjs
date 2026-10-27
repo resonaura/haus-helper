@@ -235,6 +235,7 @@ export class NvrCameraSessions {
     }
   }
   async clearContinuityNode(id) {
+    await this.clearActivityNode?.(id);
     const node = this.cluster.nodes().find((node) => node.id === id);
     if (
       node &&
@@ -530,6 +531,18 @@ export class NvrCameraSessions {
       const index = choices.findIndex((node) => node.id === assigned.id);
       if (index >= 0) choices.splice(index, 1);
       choices.unshift(assigned);
+    }
+    const activityNode = this.activityAssignedNode?.(camera);
+    if (
+      !shared &&
+      !assigned &&
+      activityNode &&
+      this.validNode(activityNode) &&
+      (!preferredNode || preferredNode.id === activityNode.id)
+    ) {
+      const index = choices.findIndex((node) => node.id === activityNode.id);
+      if (index >= 0) choices.splice(index, 1);
+      choices.unshift(activityNode);
     }
     if (
       old &&
@@ -976,6 +989,13 @@ export class NvrCameraSessions {
           for (const value of (result.items ?? []).slice(0, 16)) {
             if (this.stopped || !uuid(value.event?.id)) continue;
             let event = this.store.get(value.event.id);
+            if (
+              !event &&
+              this.camera(value.event.cameraId) &&
+              this.authorizeActivityRecording?.(node, value) &&
+              this.validateReceipt(value, value.event)
+            )
+              event = this.store.adoptActivity(value.event);
             // Unknown camera/events are not inferred from filenames or adopted
             // into another home's catalog. Autonomous triggers will use the
             // same explicit authorized metadata path.
