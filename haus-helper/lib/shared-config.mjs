@@ -12,11 +12,16 @@ const keys = new Set([
 ]);
 export class SharedConfig {
   constructor(store, onChange = () => {}) {
+    this.listeners = new Set();
     this.store = store;
     this.onChange = onChange;
     store.db.exec(
       "CREATE TABLE IF NOT EXISTS shared_config (id INTEGER PRIMARY KEY CHECK(id=1), revision TEXT NOT NULL, value TEXT NOT NULL, updated_at INTEGER NOT NULL)",
     );
+  }
+  subscribe(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
   get() {
     const row = this.store.db
@@ -53,6 +58,7 @@ export class SharedConfig {
       )
       .run(next.revision, JSON.stringify(next.value), next.updatedAt);
     this.onChange();
+    for (const listener of this.listeners) listener();
     return next;
   }
 }

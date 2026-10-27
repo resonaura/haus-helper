@@ -1,3 +1,7 @@
+# 0.3.48
+
+- Add an authenticated live channel for immediate multi-client preference and camera-settings invalidations. Keep it independent of the Home Assistant event connection, send current revision/connection state on reconnect, bound clients/payload/backpressure and retain read-only semantics. No camera transport, storage-policy or credential changes.
+
 # 0.3.44
 
 - Connect monitoring-only home servers without assigning camera or recovery jobs. Associate an existing SSH device with one managed telemetry connection, reject conflicting associations and unsupported roles, and advertise monitoring capability to the desktop. Recovery replication now honors the storage role; existing stored copies remain subject to their usual retention policy.
