@@ -123,6 +123,15 @@ export class NvrCameraSessions {
     this.recordingDiagnostics = new Map();
     this.abort = new AbortController();
     this.recordingOwner = `recording-${randomUUID()}`;
+    this.continuityAssignments = new Map();
+    this.continuitySent = new Map();
+    store.db.exec(
+      "CREATE TABLE IF NOT EXISTS nvr_camera_assignments(camera_id TEXT PRIMARY KEY,node_id TEXT NOT NULL)",
+    );
+    for (const row of store.db
+      .prepare("SELECT camera_id,node_id FROM nvr_camera_assignments")
+      .all())
+      this.continuityAssignments.set(row.camera_id, row.node_id);
     store.db.exec(
       "CREATE TABLE IF NOT EXISTS nvr_camera_events(event_id TEXT PRIMARY KEY,value TEXT NOT NULL)",
     );
@@ -138,6 +147,102 @@ export class NvrCameraSessions {
     return this.registry().cameras.find(
       (camera) => camera.id === id || camera.aliases?.includes(id),
     );
+  }
+  rememberAssignment(entry) {
+    if (
+      entry.owner !== this.recordingOwner ||
+      this.continuityAssignments.get(entry.cameraId) === entry.node.id
+    )
+      return;
+    this.continuityAssignments.set(entry.cameraId, entry.node.id);
+    this.store.db
+      .prepare(
+        "INSERT INTO nvr_camera_assignments(camera_id,node_id)VALUES(?,?) ON CONFLICT(camera_id)DO UPDATE SET node_id=excluded.node_id",
+      )
+      .run(entry.cameraId, entry.node.id);
+    this.continuitySent.clear();
+  }
+  async syncContinuity(force = false) {
+    if (this.continuityBusy || this.stopped || !this.registry().states?.length)
+      return;
+    this.continuityBusy = true;
+    try {
+      const registry = this.registry(),
+        states = new Map(
+          registry.states.map((state) => [state.entity_id, state.state]),
+        );
+      await Promise.allSettled(
+        this.cluster
+          .nodes()
+          .filter(
+            (node) =>
+              this.cluster.health.get(node.id)?.online &&
+              this.cluster.health.get(node.id)?.remote?.features
+                ?.cameraContinuity === 1,
+          )
+          .map(async (node) => {
+            const cameras = [];
+            for (const camera of registry.cameras) {
+              if (
+                !node.enabled ||
+                !node.roles.includes("stream") ||
+                !camera.enabled ||
+                !this.config.recording_enabled ||
+                this.continuityAssignments.get(camera.id) !== node.id ||
+                [camera.id, ...(camera.aliases ?? [])].some(
+                  (id) => states.get(id) === "off",
+                )
+              )
+                continue;
+              try {
+                cameras.push({
+                  cameraId: camera.id,
+                  source: nvrCameraSource(camera, registry),
+                  advertiseHost: await this.advertiseHost(node),
+                  preRollSeconds: this.config.pre_roll_seconds,
+                  requireAudio: this.config.record_audio !== false,
+                  recordAudio: this.config.record_audio !== false,
+                });
+              } catch {}
+            }
+            const fingerprint = createHash("sha256")
+              .update(JSON.stringify(cameras))
+              .digest("hex");
+            const previous = this.continuitySent.get(node.id);
+            if (
+              !force &&
+              previous?.fingerprint === fingerprint &&
+              this.now() - previous.at < 30000
+            )
+              return;
+            const expiresAt = this.now() + 24 * 3600000;
+            await this.json(node, "/v1/camera-continuity", {
+              method: "PUT",
+              data: {
+                cameras: cameras.map((camera) => ({ ...camera, expiresAt })),
+              },
+              signal: this.abort.signal,
+              timeout: 5000,
+            });
+            this.continuitySent.set(node.id, { fingerprint, at: this.now() });
+          }),
+      );
+    } finally {
+      this.continuityBusy = false;
+    }
+  }
+  async clearContinuityNode(id) {
+    const node = this.cluster.nodes().find((node) => node.id === id);
+    if (
+      node &&
+      this.cluster.health.get(id)?.remote?.features?.cameraContinuity === 1
+    )
+      await this.json(node, "/v1/camera-continuity", {
+        method: "PUT",
+        data: { cameras: [] },
+        signal: this.abort.signal,
+        timeout: 5000,
+      });
   }
   nodeLoad(node) {
     const remote = this.cluster.health.get(node.id)?.remote;
@@ -401,6 +506,28 @@ export class NvrCameraSessions {
       if (index >= 0) choices.splice(index, 1);
       choices.unshift(shared.node);
     }
+    const assigned = this.cluster
+      .nodes()
+      .find(
+        (node) =>
+          node.id === this.continuityAssignments.get(camera.id) &&
+          this.validNode(node) &&
+          this.cluster.health
+            .get(node.id)
+            ?.remote?.cameraContinuity?.cameras?.some(
+              (plan) =>
+                plan.cameraId === camera.id && plan.expiresAt > this.now(),
+            ),
+      );
+    if (
+      !shared &&
+      assigned &&
+      (!preferredNode || assigned.id === preferredNode.id)
+    ) {
+      const index = choices.findIndex((node) => node.id === assigned.id);
+      if (index >= 0) choices.splice(index, 1);
+      choices.unshift(assigned);
+    }
     if (
       old &&
       this.validNode(old.node) &&
@@ -469,6 +596,7 @@ export class NvrCameraSessions {
       throw missing("invalid_camera_node_response");
   }
   updateBuffer(entry) {
+    this.rememberAssignment(entry);
     const buffer = this.buffers.get(entry.cameraId);
     if (buffer && entry.owner === this.recordingOwner) {
       buffer.status = entry.state === "ready" ? "buffering" : "starting";
@@ -867,6 +995,7 @@ export class NvrCameraSessions {
           await this.releaseEntry(entry);
         }
       }
+      void this.syncContinuity().catch(() => {});
     } finally {
       this.ticking = false;
     }

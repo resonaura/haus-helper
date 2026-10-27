@@ -212,6 +212,8 @@ export function createApi({
         /^\/api\/cluster\/nodes\/([a-f0-9-]{36})(\/remove)?$/.exec(path);
       if (cluster && nodeMatch && ["POST", "PATCH"].includes(req.method)) {
         const input = await requestBody(req);
+        if ((nodeMatch[2] && req.method === "POST") || input.enabled === false)
+          await cameraSessions?.clearContinuityNode?.(nodeMatch[1]);
         return json(
           res,
           200,
@@ -484,6 +486,7 @@ export function createApi({
           backups?.markChanged();
           await refresh();
           await cameraAccess?.reconcile();
+          await cameraSessions?.syncContinuity?.(true);
           return json(res, 200, {
             camera: publicCamera(
               getRegistry().cameras.find((item) => item.id === id),
