@@ -1,6 +1,6 @@
 # 0.3.53
 
-- Assign opted-in Activity Assist to durable NVR policies and reattach to its existing worker after controller restart, even when the node has no spare source slot. Retain policy authority history for verified new-event adoption under the original NVR ID. Delegate accepted native semantic/PIR recording to that same policy, suppress duplicate controller capture, and retry only the same bounded recording intent. Preserve native fallback during inference pressure and existing local/older-node behavior. Never enable Assist or change camera recording settings automatically.
+- Assign opted-in Activity Assist to durable NVR policies and reattach to its existing worker after controller restart, even when the node has no spare source slot. Retain policy authority history for verified new-event adoption under the original NVR ID. Delegate accepted native semantic/PIR recording to that same policy, suppress duplicate controller capture, and retry only the same bounded recording intent. Recover policy-authorized interrupted event metadata under the same ID after node/source loss without inventing footage. Preserve native fallback during inference pressure and existing local/older-node behavior. Never enable Assist or change camera recording settings automatically.
 
 # 0.3.52
 

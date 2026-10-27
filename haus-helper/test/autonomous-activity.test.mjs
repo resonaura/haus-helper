@@ -58,11 +58,23 @@ test("explicit activity authority restores a full assigned worker, fences new-ev
     requests = [],
     captures = new Map();
   let lostAck = true;
+  let interrupted = [];
   let holdNextPut = false;
   const putStarted = Promise.withResolvers(),
     releasePut = Promise.withResolvers();
   const json = async (node, path, options = {}) => {
     requests.push({ node: node.id, path, ...options });
+    if (path === "/v1/camera-activity/interrupted")
+      return { items: interrupted };
+    if (
+      path.startsWith("/v1/camera-activity/interrupted/") &&
+      options.method === "POST"
+    ) {
+      interrupted = interrupted.filter(
+        (value) => value.event.id !== path.split("/").at(-1),
+      );
+      return { acknowledged: true };
+    }
     if (path === "/v1/camera-activity/trigger") {
       if (!captures.has(options.data.requestId))
         captures.set(options.data.requestId, randomUUID());
@@ -194,6 +206,20 @@ test("explicit activity authority restores a full assigned worker, fences new-ev
   assert.equal(
     activity.triggerNative(camera.id, "person", "native-camera-person", at),
     false,
+  );
+  const failedEvent = { ...event, id: randomUUID() };
+  interrupted = [
+    { event: failedEvent, state: "interrupted", error: "node_restarted" },
+  ];
+  await activity.recoverInterrupted();
+  const failed = store.get(failedEvent.id);
+  assert.equal(failed.status, "interrupted");
+  assert.equal(failed.bytes, 0);
+  assert.equal(failed.localOriginal, false);
+  assert.equal(
+    interrupted.length,
+    0,
+    "acknowledge only after the interrupted state is persisted under the original ID",
   );
   camera.motionDetection.enabled = true;
   await activity.ensure(camera, nodes[0]);

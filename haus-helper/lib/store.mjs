@@ -179,6 +179,18 @@ export class Store {
       );
     return this.get(event.id);
   }
+  interruptActivity(id, reason) {
+    this.db
+      .prepare(
+        "UPDATE events SET status='interrupted',error=?,local_original=0,local_playback=0 WHERE id=? AND status!='ready' AND bytes=0",
+      )
+      .run(
+        reason === "storage_full"
+          ? "The NVR did not have enough space to complete this event."
+          : "The NVR source or node interrupted this event; complete footage is unavailable.",
+        id,
+      );
+  }
   extend(id, kind, at, endAt, sensorId, maxEndAt = Infinity) {
     const old = this.get(id);
     if (!old || old.status !== "recording") return;

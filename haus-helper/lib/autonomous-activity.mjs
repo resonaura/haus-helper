@@ -17,6 +17,7 @@ export class AutonomousActivity {
     this.pending = new Map();
     this.revokingNodes = new Set();
     this.observed = new Map();
+    this.interruptedCursors = new Map();
     store.db.exec(`CREATE TABLE IF NOT EXISTS nvr_activity_policies(
       policy_id TEXT PRIMARY KEY,camera_id TEXT NOT NULL,node_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,revoked_at INTEGER);
@@ -259,6 +260,50 @@ export class AutonomousActivity {
     for (const node of this.cluster.nodes())
       await this.syncNode(node).catch(() => {});
     await this.flushTriggers();
+    await this.recoverInterrupted();
+  }
+  async recoverInterrupted() {
+    for (const node of this.cluster
+      .nodes()
+      .filter((node) => this.capable(node))) {
+      try {
+        const cursor = this.interruptedCursors.get(node.id);
+        const result = await this.json(
+          node,
+          "/v1/camera-activity/interrupted" +
+            (cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""),
+          { timeout: 4000 },
+        );
+        if (!Array.isArray(result.items)) continue;
+        this.interruptedCursors.set(
+          node.id,
+          /^\d{1,16}$/.test(result.nextCursor ?? "")
+            ? result.nextCursor
+            : undefined,
+        );
+        for (const value of result.items.slice(0, 16)) {
+          if (
+            value.state !== "interrupted" ||
+            !/^[a-f0-9-]{36}$/.test(value.event?.id ?? "") ||
+            !this.sessions.camera(value.event.cameraId) ||
+            !this.authorizes(node, value)
+          )
+            continue;
+          const previous = this.store.get(value.event.id);
+          if (previous && previous.cameraId !== value.event.cameraId) continue;
+          if (!previous) this.store.adoptActivity(value.event);
+          this.store.interruptActivity(value.event.id, value.error);
+          this.cluster.backups?.markChanged?.();
+          await this.json(
+            node,
+            `/v1/camera-activity/interrupted/${value.event.id}`,
+            { method: "POST", data: {}, timeout: 4000 },
+          );
+        }
+      } catch {
+        /* Keep the interrupted journal until the home records its state. */
+      }
+    }
   }
   triggerNative(id, kind, source, at) {
     if (this.stopped) return false;
