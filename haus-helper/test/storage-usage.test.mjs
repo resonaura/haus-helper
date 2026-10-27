@@ -97,7 +97,7 @@ test("bounded and unreadable scans are explicitly partial; missing allocation is
   const scanner = new StorageUsage({
     ...base,
     inspect: async (path, options) => {
-      if (path.endsWith("b"))
+      if (path === join(root, "b"))
         throw Object.assign(new Error("denied"), { code: "EACCES" });
       const info = await lstat(path, options);
       info.blocks = undefined;
