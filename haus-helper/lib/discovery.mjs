@@ -220,6 +220,7 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
         ...descriptor,
         source: "name",
         cameraNative: cameraNative(ranked[0].camera, device),
+        independent: Boolean(device && !cameraNative(ranked[0].camera, device)),
       });
     else
       for (const { camera } of ranked)
@@ -246,6 +247,13 @@ export function discoverCameras(states, entities, devices, overrides = {}) {
                 cameraNative: cameraNative(
                   camera,
                   deviceMap.get(registry.get(id)?.device_id),
+                ),
+                independent: Boolean(
+                  deviceMap.get(registry.get(id)?.device_id) &&
+                  !cameraNative(
+                    camera,
+                    deviceMap.get(registry.get(id)?.device_id),
+                  ),
                 ),
               },
             ]

@@ -46,7 +46,7 @@ export class CameraActivity {
     // Recognized native objects/doorbell keep their existing semantics.
     const accepted = native.filter(
       (sensor) =>
-        !validating || sensor.kind !== "motion" || !nativeCameraSensor(sensor),
+        !validating || sensor.kind !== "motion" || sensor.independent === true,
     );
     return {
       available: camera.available && (healthy || accepted.length > 0),
@@ -96,8 +96,8 @@ export class CameraActivity {
     if (
       !entry ||
       (kind === "motion" &&
-        entry.camera.sensors?.some(
-          (sensor) => sensor.id === source && nativeCameraSensor(sensor),
+        !entry.camera.sensors?.some(
+          (sensor) => sensor.id === source && sensor.independent === true,
         ) &&
         entry.camera.motionDetection?.enabled &&
         ["assisted", "analysis_unavailable"].includes(this.status(id).source))
@@ -114,7 +114,7 @@ export class CameraActivity {
           !sensor.active ||
           sensor.available === false ||
           (sensor.kind === "motion" &&
-            nativeCameraSensor(sensor) &&
+            sensor.independent !== true &&
             ["assisted", "analysis_unavailable"].includes(status.source))
         )
           continue;

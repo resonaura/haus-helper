@@ -67,6 +67,7 @@ test("independent PIR sensors stay useful while camera-native pixel motion is fi
     id: "binary_sensor.hue_pir",
     kind: "motion",
     source: "name",
+    independent: true,
     available: true,
     active: true,
   });
@@ -76,6 +77,20 @@ test("independent PIR sensors stay useful while camera-native pixel motion is fi
   assert.deepEqual(activity.status(camera.id).replaces, [
     "binary_sensor.front_motion",
   ]);
+});
+test("a name-linked HA group without physical identity cannot bypass Assist validation", () => {
+  const { activity, captures, camera } = fixture();
+  camera.sensors[0] = {
+    id: "binary_sensor.front_group",
+    source: "name",
+    kind: "motion",
+    available: true,
+    active: true,
+  };
+  activity.native(camera.id, "motion", camera.sensors[0].id);
+  activity.tick();
+  assert.equal(activity.status(camera.id).active, false);
+  assert.equal(captures.length, 0);
 });
 test("unavailable analysis falls back explicitly to native motion, never a false clear", () => {
   const { activity, captures, camera, unhealthy, advance } = fixture();
