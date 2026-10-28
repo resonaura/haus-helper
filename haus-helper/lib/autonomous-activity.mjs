@@ -17,11 +17,13 @@ export class AutonomousActivity {
     this.pending = new Map();
     this.revokingNodes = new Set();
     this.observed = new Map();
+    this.assignments = new Map();
     this.interruptedCursors = new Map();
     store.db.exec(`CREATE TABLE IF NOT EXISTS nvr_activity_policies(
       policy_id TEXT PRIMARY KEY,camera_id TEXT NOT NULL,node_id TEXT NOT NULL,
       created_at INTEGER NOT NULL,expires_at INTEGER NOT NULL,revoked_at INTEGER);
-      CREATE INDEX IF NOT EXISTS nvr_activity_camera ON nvr_activity_policies(camera_id,revoked_at)`);
+      CREATE INDEX IF NOT EXISTS nvr_activity_camera ON nvr_activity_policies(camera_id,revoked_at);
+      CREATE TABLE IF NOT EXISTS nvr_activity_releases(policy_id TEXT PRIMARY KEY,camera_id TEXT NOT NULL,node_id TEXT NOT NULL,expires_at INTEGER NOT NULL)`);
     store.db.exec(
       "CREATE TABLE IF NOT EXISTS nvr_activity_triggers(request_id TEXT PRIMARY KEY,node_id TEXT NOT NULL,value TEXT NOT NULL,expires_at INTEGER NOT NULL)",
     );
@@ -77,18 +79,79 @@ export class AutonomousActivity {
       ? node
       : undefined;
   }
-  async ensure(camera, node) {
+  ensure(camera, node) {
+    const task = (this.assignments.get(camera.id) ?? Promise.resolve())
+      .catch(() => {})
+      .then(() => this.ensureOne(camera, node));
+    this.assignments.set(camera.id, task);
+    return task.finally(() => {
+      if (this.assignments.get(camera.id) === task)
+        this.assignments.delete(camera.id);
+    });
+  }
+  retire(policy) {
+    this.store.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.store.db
+        .prepare(
+          "UPDATE nvr_activity_policies SET revoked_at=? WHERE policy_id=? AND revoked_at IS NULL",
+        )
+        .run(this.now(), policy.policy_id);
+      this.store.db
+        .prepare(
+          "INSERT OR IGNORE INTO nvr_activity_releases(policy_id,camera_id,node_id,expires_at)VALUES(?,?,?,?)",
+        )
+        .run(
+          policy.policy_id,
+          policy.camera_id,
+          policy.node_id,
+          policy.expires_at,
+        );
+      this.store.db
+        .prepare(
+          "DELETE FROM nvr_activity_triggers WHERE json_extract(value,'$.policyId')=?",
+        )
+        .run(policy.policy_id);
+      this.store.db.exec("COMMIT");
+    } catch (error) {
+      this.store.db.exec("ROLLBACK");
+      throw error;
+    }
+    this.observed.delete(policy.camera_id);
+    this.sent.delete(policy.node_id);
+    this.cluster.backups?.markChanged?.();
+  }
+  async drainReleases(cameraId) {
+    this.store.db
+      .prepare("DELETE FROM nvr_activity_releases WHERE expires_at<=?")
+      .run(this.now());
+    const releases = this.store.db
+      .prepare(
+        "SELECT DISTINCT node_id FROM nvr_activity_releases WHERE camera_id=?",
+      )
+      .all(cameraId);
+    for (const release of releases) {
+      const node = this.cluster
+        .nodes()
+        .find((node) => node.id === release.node_id);
+      // An unreachable old owner cannot acknowledge revocation. Retain the
+      // release for rejoin and fence its new events locally, without blocking
+      // a healthy admitted replacement indefinitely.
+      if (!this.capable(node)) continue;
+      await this.pending.get(node.id)?.catch(() => {});
+      await this.syncNode(node, true);
+    }
+  }
+  async ensureOne(camera, node) {
     if (this.stopped) throw Error("activity_stopped");
     let policy = this.active(camera.id);
     if (!this.enabled(camera) || !this.capable(node))
       throw Error("activity_assignment_unavailable");
     if (!policy || policy.node_id !== node.id) {
-      if (policy)
-        this.store.db
-          .prepare(
-            "UPDATE nvr_activity_policies SET revoked_at=? WHERE policy_id=?",
-          )
-          .run(this.now(), policy.policy_id);
+      if (policy) this.retire(policy);
+      await this.drainReleases(camera.id);
+      if (this.stopped || !this.enabled(camera) || !this.capable(node))
+        throw Error("activity_assignment_unavailable");
       const id = randomUUID();
       this.store.db
         .prepare(
@@ -137,12 +200,7 @@ export class AutonomousActivity {
         (camera) => camera.id === policy.camera_id,
       );
       if (!this.enabled(camera)) {
-        this.store.db
-          .prepare(
-            "UPDATE nvr_activity_policies SET revoked_at=? WHERE policy_id=?",
-          )
-          .run(this.now(), policy.policy_id);
-        this.cluster.backups?.markChanged?.();
+        this.retire(policy);
         continue;
       }
       plans.push({
@@ -176,6 +234,9 @@ export class AutonomousActivity {
       data: { cameras: plans },
       timeout: 6000,
     });
+    this.store.db
+      .prepare("DELETE FROM nvr_activity_releases WHERE node_id=?")
+      .run(node.id);
     for (const plan of plans)
       this.store.db
         .prepare(
@@ -187,17 +248,15 @@ export class AutonomousActivity {
   async revoke(id) {
     const policy = this.active(id);
     if (!policy) return;
-    this.store.db
-      .prepare(
-        "UPDATE nvr_activity_policies SET revoked_at=? WHERE policy_id=?",
-      )
-      .run(this.now(), policy.policy_id);
-    this.cluster.backups?.markChanged?.();
+    this.retire(policy);
     const node = this.cluster
       .nodes()
       .find((node) => node.id === policy.node_id);
     this.sent.delete(policy.node_id);
-    if (node) await this.syncNode(node, true);
+    if (node) {
+      await this.pending.get(node.id)?.catch(() => {});
+      await this.syncNode(node, true);
+    }
   }
   async clearNode(id) {
     const node = this.cluster.nodes().find((node) => node.id === id);
@@ -222,6 +281,9 @@ export class AutonomousActivity {
         .run(this.now(), id);
       this.cluster.backups?.markChanged?.();
       this.sent.delete(id);
+      this.store.db
+        .prepare("DELETE FROM nvr_activity_releases WHERE node_id=?")
+        .run(id);
     } finally {
       this.revokingNodes.delete(id);
     }
@@ -244,6 +306,8 @@ export class AutonomousActivity {
       Number.isSafeInteger(event.startAt) &&
       Number.isSafeInteger(event.endAt) &&
       event.startAt >= policy.created_at - 30000 &&
+      event.startAt <=
+        Math.min(policy.expires_at, policy.revoked_at ?? Infinity) &&
       event.endAt <=
         Math.min(policy.expires_at, policy.revoked_at ?? Infinity) + 300000 &&
       event.endAt > event.startAt &&
@@ -402,6 +466,7 @@ export class AutonomousActivity {
   }
   async stop() {
     this.stopped = true;
+    await Promise.allSettled(this.assignments.values());
     await Promise.allSettled(this.pending.values());
     await this.flushing;
   }

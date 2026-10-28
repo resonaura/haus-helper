@@ -1,3 +1,7 @@
+# 0.3.54
+
+- Persist pending Activity Assist revocations during node handoff. Drain a reachable owner's in-flight refresh and require its revocation ACK before assigning a replacement; preserve retries across Helper restart. An unreachable owner remains queued for cleanup on return while a capable replacement can proceed. Reject new events started after policy expiry/revocation while retaining the bounded completion window for captures already in progress. No automatic Assist opt-in, source transport or node budget changes. This controller-mediated handoff does not introduce peer election.
+
 # 0.3.53
 
 - Assign opted-in Activity Assist to durable NVR policies and reattach to its existing worker after controller restart, even when the node has no spare source slot. Retain policy authority history for verified new-event adoption under the original NVR ID. Delegate accepted native semantic/PIR recording to that same policy, suppress duplicate controller capture, and retry only the same bounded recording intent. Recover policy-authorized interrupted event metadata under the same ID after node/source loss without inventing footage. Preserve native fallback during inference pressure and existing local/older-node behavior. Never enable Assist or change camera recording settings automatically.
