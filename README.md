@@ -1,3 +1,7 @@
+> **Public archive:** Active development of Haus Helper, the Home Assistant app, the desktop app, and NVR now lives in the [Haus monorepo](https://github.com/resonaura/haus). The projects were consolidated to avoid duplicate code and keep shared changes and releases in sync. This repository remains available as a historical archive; use the monorepo for current source and installation instructions.
+
+---
+
 # Haus
 
 Private home server and camera companion services for [Haus](https://github.com/resonaura/haus). This repository is `haus-helper`; the Home Assistant app is named **Haus**.
